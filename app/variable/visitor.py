@@ -1,7 +1,9 @@
 import ast
 from typing import Optional
 
+
 class UnboundVariableFinder(ast.NodeVisitor):
+    MAGIC_FN_NAME = "__lazy_expr"
     _imports: set[str]
     _assigned: set[str]
     _unbound: set[str]
@@ -13,10 +15,16 @@ class UnboundVariableFinder(ast.NodeVisitor):
         self._unbound = set()
 
     def visit_Assign(self, node):
-        raise Exception("Assignment is not allowed")
+        raise TypeError("Assignment is not allowed")
 
     def visit_ClassDef(self, node):
-        raise Exception("Class definition is not allowed")
+        raise TypeError("Class definition is not allowed")
+
+    def visit_FunctionDef(self, node):
+        if node.name != self.MAGIC_FN_NAME:
+            raise TypeError("Function definition is not allowed")
+        else:
+            self.generic_visit(node)
 
     def visit_NamedExpr(self, node):
         if isinstance(node.target, ast.Name):
@@ -64,7 +72,7 @@ class UnboundVariableFinder(ast.NodeVisitor):
     @property
     def builtin(self):
         return set(dir(__builtins__))
-    
+
     @property
     def target(self):
         return self._target
@@ -87,4 +95,3 @@ class ImportValidator(ast.NodeVisitor):
             dump = ast.dump(node, indent=2)
             raise ValueError(f"Invalid import statement {dump}")
         super().generic_visit(node)
-
