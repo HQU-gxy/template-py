@@ -47,6 +47,7 @@ class LazyExpr:
         ast.fix_missing_locations(self._ast)
         self._finder = UnboundVariableFinder()
         self._finder.visit(self._ast)
+    
 
     @property
     def unbound(self):
@@ -68,6 +69,13 @@ class LazyExpr:
         If the expression is a named expression (defined with walrus operator `:=`), returns the name of the variable
         """
         return self._finder.target
+    
+    @property
+    def raw(self):
+        """
+        Returns the raw expression
+        """
+        return self._raw
 
     def eval(self, env: Optional[Dict[str, Any]] = None):
         """

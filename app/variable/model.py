@@ -14,13 +14,19 @@ PreprocessorFn = Callable[[Any], Any] | LazyExpr | None
 
 @runtime_checkable
 class Variable(Protocol):
-    name: str
-    comment: Optional[str] = None
 
     def load(self, env: EnvDict = None) -> Result[Any, Exception]:
         ...
 
     def value(self, env: EnvDict = None) -> Any:
+        ...
+
+    @property
+    def name(self) -> str:
+        ...
+
+    @property
+    def comment(self) -> Optional[str]:
         ...
 
     @property
@@ -42,8 +48,8 @@ class LiteralVariableDict(TypedDict):
 
 
 class LiteralVariable(Variable):
-    name: str
-    comment: Optional[str] = None
+    _name: str
+    _comment: Optional[str] = None
     formatter: FormatterFn = None
     _value: LazyExpr
     _evaluated_value: Optional[Any] = None
@@ -55,10 +61,10 @@ class LiteralVariable(Variable):
         comment: Optional[str] = None,
         formatter: FormatterFn = None,
     ):
-        self.name = name
+        self._name = name
         self._value = value
         self.formatter = formatter
-        self.comment = comment
+        self._comment = comment
 
     @staticmethod
     def from_dict(
@@ -75,6 +81,14 @@ class LiteralVariable(Variable):
             return Ok(LiteralVariable(name, value, comment, formatter))
         except Exception as e:
             return Err(e)
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def comment(self) -> Optional[str]:
+        return self._comment
 
     def load(self, env: EnvDict = None) -> Result[Any, Exception]:
         """
@@ -98,12 +112,12 @@ class LiteralVariable(Variable):
         Check cache first, if not found, load the value from the expression
         """
         if self._evaluated_value:
-            return Ok(self._evaluated_value)
+            return self._evaluated_value
         res = self.load(env)
         if res.is_err():
             raise res.unwrap_err()
         self._evaluated_value = res.unwrap()
-        return Ok(self._evaluated_value)
+        return self._evaluated_value
 
     def format(self, env: EnvDict = None) -> str:
         val = self.value(env)
@@ -126,13 +140,13 @@ class JsonPathVariableDict(TypedDict):
 
 
 class JsonPathVariable(Variable):
-    name: str
-    comment: Optional[str] = None
+    _name: str
+    _comment: Optional[str] = None
     formatter: FormatterFn = None
     validator: ValidatorFn = None
     preprocessor: PreprocessorFn = None
-    data_source: DataSource
-    json_path: str
+    _data_source: DataSource
+    _json_path: str
     # value after preprocessed
     _value: Any = None
 
@@ -144,10 +158,10 @@ class JsonPathVariable(Variable):
                  formatter: FormatterFn = None,
                  validator: ValidatorFn = None,
                  preprocessor: PreprocessorFn = None):
-        self.name = name
-        self.data_source = data_source
-        self.json_path = json_path
-        self.comment = comment
+        self._name = name
+        self._data_source = data_source
+        self._json_path = json_path
+        self._comment = comment
         self.formatter = formatter
         self.validator = validator
         self.preprocessor = preprocessor
@@ -184,16 +198,24 @@ class JsonPathVariable(Variable):
             JsonPathVariable(name, data_source, json_path, comment, formatter,
                              validator, preprocessor))
 
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def comment(self) -> Optional[str]:
+        return self._comment
+
     def load(self, env: EnvDict = None) -> Result[Any, Exception]:
         """
         Load the data from the data source and apply the json path
         """
-        res = self.data_source.load()
+        res = self._data_source.load()
         if res.is_err():
             return res
         data = res.unwrap()
         try:
-            json_path_expr = parse(self.json_path)
+            json_path_expr = parse(self._json_path)
             match = json_path_expr.find(data)
             if not match:
                 return Err(ValueError("No match found"))
@@ -207,12 +229,12 @@ class JsonPathVariable(Variable):
         and then preprocess the value
         """
         if self._value:
-            return Ok(self._value)
+            return self._value
         res = self.load()
         if res.is_err():
             raise res.unwrap_err()
         self._value = self.preprocess(res.unwrap(), env=env)
-        return Ok(self._value)
+        return self._value
 
     def preprocess(self, item: Any, env: EnvDict = None) -> Any:
         """

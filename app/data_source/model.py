@@ -4,7 +4,7 @@ from typing import Dict, Any, Optional
 from typing_extensions import Protocol, runtime_checkable
 from result import Result, Ok, Err
 import requests
-# or use ujson
+# ujson also works
 import orjson as json
 
 
@@ -24,10 +24,16 @@ class DataSource(Protocol):
 
     @staticmethod
     def source_type() -> SourceType:
+        """
+        Returns the type of the data source
+        """
         ...
 
     # TODO: add an optional `options` parameter and async support
     def load(self) -> Result[Dict[str, Any], Exception]:
+        """
+        Loads the data source and returns the data as a dictionary
+        """
         ...
 
 
@@ -50,7 +56,9 @@ class APISource(BaseModel):
             res_ = requests.get(self.url, timeout=5)
             res = json.loads(res_.text)  # pylint: disable=maybe-no-member
             if not isinstance(res, dict):
-                return Err(Exception("json result file must be a dict"))
+                return Err(
+                    TypeError("result must be a dict; get {} ({})".format(
+                        res, type(res))))
             return Ok(res)
         except Exception as e:
             return Err(e)
@@ -74,7 +82,9 @@ class JsonSource(BaseModel):
                 s = f.read()
                 res = json.loads(s)  # pylint: disable=maybe-no-member
                 if not isinstance(res, dict):
-                    return Err(Exception("json result file must be a dict"))
+                    return Err(
+                        TypeError("result must be a dict; get {} ({})".format(
+                            res, type(res))))
                 return Ok(res)
             except Exception as e:
                 return Err(e)
