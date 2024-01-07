@@ -11,6 +11,7 @@ class ParseStepResult:
     hash: str
     expr: str
 
+
 @dataclass
 class ParseResult:
     text: str
@@ -30,10 +31,23 @@ def parse_step(text: str,
             if i + 1 < len(sub) and sub[i + 1] == "{":
                 start = i + 2
                 end = start
-                while end < len(sub) and sub[end] != "}":
-                    end += 1
+                nested_cnt = 0
+                while end < len(sub):
+                    if sub[end] == "{":
+                        nested_cnt += 1
+                    if sub[end] == "}":
+                        if nested_cnt == 0:
+                            break
+                        else:
+                            nested_cnt -= 1
+                            end += 1
+                    else:
+                        end += 1
                 if end == len(sub):
-                    return Err(ValueError("Unmatched braces"))
+                    return Err(
+                        ValueError(
+                            "Unmatched braces from {}".format(start_offset +
+                                                              start)))
                 expr = sub[start:end]
                 s_offset = start_offset + start - 2
                 hsh = xxhash.xxh32()
