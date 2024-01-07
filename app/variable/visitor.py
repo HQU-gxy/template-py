@@ -64,6 +64,10 @@ class UnboundVariableFinder(ast.NodeVisitor):
     @property
     def builtin(self):
         return set(dir(__builtins__))
+    
+    @property
+    def target(self):
+        return self._target
 
     @property
     def unbound(self):

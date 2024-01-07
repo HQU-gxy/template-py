@@ -3,9 +3,10 @@ import warnings
 import ast
 from .visitor import UnboundVariableFinder, ImportValidator
 
+EnvDict = Optional[Dict[str, Any]]
 
 class LazyExpr:
-    MAGIC_FN_NAME = "lazy_expr"
+    MAGIC_FN_NAME = "__lazy_expr"
     _raw: str
     _ast: ast.Module
     _imports: list[str]
@@ -66,9 +67,15 @@ class LazyExpr:
         """
         If the expression is a named expression (defined with walrus operator `:=`), returns the name of the variable
         """
-        return self._finder._target
+        return self._finder.target
 
     def eval(self, env: Optional[Dict[str, Any]] = None):
+        """
+        Evaluates the LazyExpr and returns the result
+
+        params:
+            env: a dictionary of variables to be injected into the function
+        """
         compiled = compile(self._ast, "<string>", "exec")
         _env = {}
         # pylint: disable-next=exec-used
@@ -81,10 +88,14 @@ class LazyExpr:
     def __call__(self, *args, env: Optional[Dict[str, Any]] = None, **kwargs):
         """
         Evaluates the LazyExpr as a function
+
+        params:
+            env: a dictionary of variables to be injected into the function
+            args: positional arguments to be passed to the function
+            kwargs: keyword arguments to be passed to the function
         """
         fn = self.eval(env)
         if not isinstance(fn, Callable):
-            raise TypeError(
-                "Not a callable function. Actual type {} ({})".format(
-                    type(fn), fn))
+            raise TypeError("Not a callable. Actual type {} ({})".format(
+                type(fn), fn))
         return fn(*args, **kwargs)
