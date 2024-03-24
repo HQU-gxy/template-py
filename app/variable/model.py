@@ -185,8 +185,6 @@ class JsonPathVariable(Variable):
     preprocessor: PreprocessorFn = None
     _data_source: DataSource
     _json_path: str
-    # value after preprocessed
-    _value: Any = None
     _evaluated_value: ExpectedType = None
 
     def __init__(self,
@@ -266,7 +264,7 @@ class JsonPathVariable(Variable):
     def load(self, env: EnvDict = None) -> Result[Any, Exception]:
         """
         Load the data from the data source and apply the json path
-        TODO: cache the data...
+        TODO: cache the data source loadings
         """
         res = self._data_source.load()
         if res.is_err():
@@ -283,16 +281,13 @@ class JsonPathVariable(Variable):
 
     def value(self, env: EnvDict = None) -> Any:
         """
-        Check cache first, if not found, load the data and apply the json path
-        and then preprocess the value
+        load the value from the data source and apply the json path
+        TODO: use LRUCache
         """
-        if self._value:
-            return self._value
         res = self.load()
         if res.is_err():
             raise res.unwrap_err()
-        self._value = self.preprocess(res.unwrap(), env=env)
-        return self._value
+        return self.preprocess(res.unwrap(), env=env)
 
     def preprocess(self, item: Any, env: EnvDict = None) -> Any:
         """
@@ -343,6 +338,7 @@ class JsonPathVariable(Variable):
 
         return validate_with_validator(val) and validate_with_expected_type(
             val)
+
 
 # TODO: https://docs.pydantic.dev/latest/concepts/serialization/
 # TODO: https://docs.pydantic.dev/latest/api/config/
