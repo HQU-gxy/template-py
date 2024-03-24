@@ -343,3 +343,6 @@ class JsonPathVariable(Variable):
 
         return validate_with_validator(val) and validate_with_expected_type(
             val)
+
+# TODO: https://docs.pydantic.dev/latest/concepts/serialization/
+# TODO: https://docs.pydantic.dev/latest/api/config/
