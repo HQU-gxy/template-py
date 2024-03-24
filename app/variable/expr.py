@@ -1,12 +1,22 @@
-from typing import Dict, Any, Optional, Callable
+from typing import Dict, Any, Optional, Callable, TypeVar, Union, List, Generic, Final
+from typeguard import check_type
 import warnings
 import ast
 from .visitor import UnboundVariableFinder, ImportValidator
 
 EnvDict = Optional[Dict[str, Any]]
 
-class LazyExpr:
-    MAGIC_FN_NAME = "__lazy_expr"
+T = TypeVar("T")
+
+
+class LazyExpr(Generic[T]):
+    """
+    A lazy expression that can be evaluated later
+    
+    template parameters:
+        T: the type of the expression after evaluation
+    """
+    MAGIC_FN_NAME: Final[str] = UnboundVariableFinder.MAGIC_FN_NAME
     _raw: str
     _ast: ast.Module
     _imports: list[str]
@@ -47,7 +57,6 @@ class LazyExpr:
         ast.fix_missing_locations(self._ast)
         self._finder = UnboundVariableFinder()
         self._finder.visit(self._ast)
-    
 
     @property
     def unbound(self):
@@ -69,7 +78,7 @@ class LazyExpr:
         If the expression is a named expression (defined with walrus operator `:=`), returns the name of the variable
         """
         return self._finder.target
-    
+
     @property
     def raw(self):
         """
@@ -77,7 +86,9 @@ class LazyExpr:
         """
         return self._raw
 
-    def eval(self, env: Optional[Dict[str, Any]] = None):
+    def eval(self,
+             env: Optional[Dict[str, Any]] = None,
+             is_type_check=True) -> T:
         """
         Evaluates the LazyExpr and returns the result
 
@@ -90,7 +101,10 @@ class LazyExpr:
         exec(compiled, _env)
         if env:
             _env.update(env)
-        return _env[self.MAGIC_FN_NAME]()
+        val = _env[self.MAGIC_FN_NAME]()
+        if is_type_check:
+            check_type(val, T)
+        return val
 
     # https://peps.python.org/pep-3102/
     def __call__(self, *args, env: Optional[Dict[str, Any]] = None, **kwargs):
@@ -102,7 +116,7 @@ class LazyExpr:
             args: positional arguments to be passed to the function
             kwargs: keyword arguments to be passed to the function
         """
-        fn = self.eval(env)
+        fn = self.eval(env, is_type_check=False)
         if not isinstance(fn, Callable):
             raise TypeError("Not a callable. Actual type {} ({})".format(
                 type(fn), fn))

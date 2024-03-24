@@ -1,11 +1,12 @@
 from enum import Enum, auto
+from io import TextIOWrapper
 from pydantic import BaseModel
-from typing import Dict, Any, Optional, Union, Final
+from typing import Dict, Any, Optional, Union, Final, Callable
 from typing_extensions import Protocol, runtime_checkable
 from typeguard import typechecked
 from result import Result, Ok, Err
 from jsonschema import validate, ValidationError
-from anyio import open_file
+from anyio import open_file, AsyncFile
 import httpx
 # ujson also works
 import orjson as json
@@ -85,6 +86,26 @@ def verify(data: Dict[str, Any],
             TypeError(f"schema must be a dict or a str; get {type(schema)}"))
 
 
+def common_load_impl(
+        s: str, is_verify: bool,
+        verify_fn: Callable[[Dict[str, Any], JsonSchemaLoader],
+                            Result[None, Exception]],
+        schema: JsonSchemaLoader) -> Result[Dict[str, Any], Exception]:
+    try:
+        res = json.loads(s)  # pylint: disable=maybe-no-member
+        if not isinstance(res, dict):
+            return Err(
+                TypeError("result must be a dict; get {} ({})".format(
+                    res, type(res))))
+        if is_verify:
+            verify_res = verify_fn(res, schema)
+            if verify_res.is_err():
+                return Err(verify_res.unwrap_err())
+        return Ok(res)
+    except Exception as e:
+        return Err(e)
+
+
 # https://mypy.readthedocs.io/en/latest/protocols.html#using-isinstance-with-protocols
 @runtime_checkable
 class DataSource(Protocol):
@@ -127,6 +148,10 @@ class APISource(BaseModel):
     def source_type() -> SourceType:
         return APISource.SOURCE_TYPE
 
+    def _load_impl(self, s: str,
+                   is_verify: bool) -> Result[Dict[str, Any], Exception]:
+        return common_load_impl(s, is_verify, verify, self.schema)
+
     def load(self, is_verify=True) -> Result[Dict[str, Any], Exception]:
         """load json file from `url`
 
@@ -135,16 +160,7 @@ class APISource(BaseModel):
         """
         try:
             res_ = httpx.get(self.url, timeout=5)
-            res = json.loads(res_.text)  # pylint: disable=maybe-no-member
-            if not isinstance(res, dict):
-                return Err(
-                    TypeError("result must be a dict; get {} ({})".format(
-                        res, type(res))))
-            if is_verify:
-                verify_res = verify(res, self.schema)
-                if verify_res.is_err():
-                    return Err(verify_res.unwrap_err())
-            return Ok(res)
+            return self._load_impl(res_.text, is_verify)
         except Exception as e:
             return Err(e)
 
@@ -158,16 +174,7 @@ class APISource(BaseModel):
         try:
             async with httpx.AsyncClient() as client:
                 res_ = await client.get(self.url, timeout=5)
-                res = json.loads(res_.text)  # pylint: disable=maybe-no-member
-                if not isinstance(res, dict):
-                    return Err(
-                        TypeError("result must be a dict; get {} ({})".format(
-                            res, type(res))))
-                if is_verify:
-                    verify_res = verify(res, self.schema)
-                    if verify_res.is_err():
-                        return Err(verify_res.unwrap_err())
-                return Ok(res)
+                return self._load_impl(res_.text, is_verify)
         except Exception as e:
             return Err(e)
 
@@ -189,6 +196,10 @@ class JsonSource(BaseModel):
     def source_type() -> SourceType:
         return JsonSource.SOURCE_TYPE
 
+    def _load_impl(self, s: str,
+                   is_verify: bool) -> Result[Dict[str, Any], Exception]:
+        return common_load_impl(s, is_verify, verify, self.schema)
+
     def load(self, is_verify=True) -> Result[Dict[str, Any], Exception]:
         """
         load json file from `path`
@@ -196,16 +207,7 @@ class JsonSource(BaseModel):
         with open(self.path, "r", encoding="utf-8") as f:
             try:
                 s = f.read()
-                res = json.loads(s)  # pylint: disable=maybe-no-member
-                if not isinstance(res, dict):
-                    return Err(
-                        TypeError("result must be a dict; get {} ({})".format(
-                            res, type(res))))
-                if is_verify:
-                    verify_res = verify(res, self.schema)
-                    if verify_res.is_err():
-                        return Err(verify_res.unwrap_err())
-                return Ok(res)
+                return self._load_impl(s, is_verify)
             except Exception as e:
                 return Err(e)
 
@@ -217,16 +219,7 @@ class JsonSource(BaseModel):
         async with await open_file(self.path, "r", encoding="utf-8") as f:
             try:
                 s = await f.read()
-                res = json.loads(s)  # pylint: disable=maybe-no-member
-                if not isinstance(res, dict):
-                    return Err(
-                        TypeError("result must be a dict; get {} ({})".format(
-                            res, type(res))))
-                if is_verify:
-                    verify_res = verify(res, self.schema)
-                    if verify_res.is_err():
-                        return Err(verify_res.unwrap_err())
-                return Ok(res)
+                return self._load_impl(s, is_verify)
             except Exception as e:
                 return Err(e)
 

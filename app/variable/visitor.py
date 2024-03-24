@@ -1,9 +1,9 @@
 import ast
-from typing import Optional
+from typing import Optional, Final
 
 
 class UnboundVariableFinder(ast.NodeVisitor):
-    MAGIC_FN_NAME = "__lazy_expr"
+    MAGIC_FN_NAME: Final[str] = "__lazy_expr"
     _imports: set[str]
     _assigned: set[str]
     _unbound: set[str]

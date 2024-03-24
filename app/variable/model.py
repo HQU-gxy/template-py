@@ -1,15 +1,19 @@
 from enum import Enum, auto
+from altair import LayerChart
+from pexpect import ExceptionPexpect
 from pydantic import BaseModel
 from typing import Dict, Any, List, Optional, Callable, Set
 from typing_extensions import Protocol, TypedDict, runtime_checkable, NotRequired
 from result import Result, Ok, Err
 from .expr import LazyExpr, EnvDict
 from app.data_source.model import DataSource
+from typeguard import check_type, typechecked
 from jsonpath_ng import parse, jsonpath
 
-FormatterFn = Callable[[Any], str] | LazyExpr | None
-ValidatorFn = Callable[[Any], bool] | LazyExpr | None
-PreprocessorFn = Callable[[Any], Any] | LazyExpr | None
+FormatterFn = Callable[[Any], str] | LazyExpr[Callable[[Any], str]] | None
+ValidatorFn = Callable[[Any], bool] | LazyExpr[Callable[[Any], bool]] | None
+PreprocessorFn = Callable[[Any], Any] | LazyExpr[Callable[[Any], Any]] | None
+ExpectedType = Optional[type]
 
 
 @runtime_checkable
@@ -33,6 +37,10 @@ class Variable(Protocol):
     def unbound(self) -> set[str]:
         ...
 
+    @property
+    def expected_type(self) -> ExpectedType:
+        ...
+
     def format(self, env: EnvDict = None) -> str:
         return str(self.value)
 
@@ -44,6 +52,7 @@ class LiteralVariableDict(TypedDict):
     name: str
     comment: Optional[str]
     formatter: NotRequired[str]
+    expected_type: NotRequired[str]
     value: str
 
 
@@ -52,19 +61,19 @@ class LiteralVariable(Variable):
     _comment: Optional[str] = None
     formatter: FormatterFn = None
     _value: LazyExpr
-    _evaluated_value: Optional[Any] = None
+    _evaluated_value: ExpectedType = None
 
-    def __init__(
-        self,
-        name: str,
-        value: LazyExpr,
-        comment: Optional[str] = None,
-        formatter: FormatterFn = None,
-    ):
+    def __init__(self,
+                 name: str,
+                 value: LazyExpr,
+                 comment: Optional[str] = None,
+                 formatter: FormatterFn = None,
+                 expected_type: ExpectedType = None):
         self._name = name
         self._value = value
         self.formatter = formatter
         self._comment = comment
+        self._expected_type = expected_type
 
     @staticmethod
     def from_dict(
@@ -78,9 +87,27 @@ class LiteralVariable(Variable):
             formatter_ = data.get("formatter", None)
             formatter = LazyExpr(formatter_, imports) if formatter_ and len(
                 formatter_.strip()) != 0 else None
-            return Ok(LiteralVariable(name, value, comment, formatter))
+            expected_type_ = data.get("expected_type", None)
+            expected_type__ = LazyExpr(
+                expected_type_, imports) if expected_type_ and len(
+                    expected_type_.strip()) != 0 else None
+            expected_type___: ExpectedType = None
+            if expected_type__ is not None:
+                if (t :=
+                        expected_type__.eval()) is not None and not isinstance(
+                            t, type):
+                    expected_type___ = t
+                    raise ValueError(
+                        f"Expected type must be a type. Get {t} ({type(t)})")
+            return Ok(
+                LiteralVariable(name, value, comment, formatter,
+                                expected_type___))
         except Exception as e:
             return Err(e)
+
+    @property
+    def expected_type(self) -> ExpectedType:
+        return self._expected_type
 
     @property
     def name(self) -> str:
@@ -128,6 +155,16 @@ class LiteralVariable(Variable):
                 return self.formatter(val)
         return str(val)
 
+    def validate(self, env: EnvDict = None) -> bool:
+        val = self.value(env)
+
+        def validate_with_expected_type(val: Any) -> bool:
+            if self.expected_type:
+                check_type(val, self.expected_type)
+            return True
+
+        return validate_with_expected_type(val)
+
 
 class JsonPathVariableDict(TypedDict):
     name: str
@@ -135,6 +172,7 @@ class JsonPathVariableDict(TypedDict):
     formatter: NotRequired[str]
     validator: NotRequired[str]
     preprocessor: NotRequired[str]
+    expected_type: NotRequired[str]
     data_source: str
     json_path: str
 
@@ -149,6 +187,7 @@ class JsonPathVariable(Variable):
     _json_path: str
     # value after preprocessed
     _value: Any = None
+    _evaluated_value: ExpectedType = None
 
     def __init__(self,
                  name: str,
@@ -157,7 +196,8 @@ class JsonPathVariable(Variable):
                  comment: Optional[str] = None,
                  formatter: FormatterFn = None,
                  validator: ValidatorFn = None,
-                 preprocessor: PreprocessorFn = None):
+                 preprocessor: PreprocessorFn = None,
+                 expected_type: ExpectedType = None):
         self._name = name
         self._data_source = data_source
         self._json_path = json_path
@@ -165,6 +205,7 @@ class JsonPathVariable(Variable):
         self.formatter = formatter
         self.validator = validator
         self.preprocessor = preprocessor
+        self._expected_type = expected_type
 
     @staticmethod
     def from_dict(
@@ -189,6 +230,18 @@ class JsonPathVariable(Variable):
                 (ds for ds in data_sources if ds.name == data["data_source"]),
                 None)
             json_path = data["json_path"]
+            expected_type_ = data.get("expected_type", None)
+            expected_type__ = LazyExpr(
+                expected_type_, imports) if expected_type_ and len(
+                    expected_type_.strip()) != 0 else None
+            expected_type___: ExpectedType = None
+            if expected_type__ is not None:
+                if (t :=
+                        expected_type__.eval()) is not None and not isinstance(
+                            t, type):
+                    expected_type___ = t
+                    raise ValueError(
+                        f"Expected type must be a type. Get {t} ({type(t)})")
         except Exception as e:
             return Err(e)
         if not data_source:
@@ -196,7 +249,11 @@ class JsonPathVariable(Variable):
                 ValueError(f"Data source {data['data_source']} not found"))
         return Ok(
             JsonPathVariable(name, data_source, json_path, comment, formatter,
-                             validator, preprocessor))
+                             validator, preprocessor, expected_type___))
+
+    @property
+    def expected_type(self) -> ExpectedType:
+        return self._expected_type
 
     @property
     def name(self) -> str:
@@ -209,6 +266,7 @@ class JsonPathVariable(Variable):
     def load(self, env: EnvDict = None) -> Result[Any, Exception]:
         """
         Load the data from the data source and apply the json path
+        TODO: cache the data...
         """
         res = self._data_source.load()
         if res.is_err():
@@ -269,9 +327,19 @@ class JsonPathVariable(Variable):
 
     def validate(self, env: EnvDict = None) -> bool:
         val = self.value(env)
-        if self.validator:
-            if isinstance(self.validator, LazyExpr):
-                return self.validator(val, env=env)  # pylint: disable=not-callable
-            elif isinstance(self.validator, Callable):
-                return self.validator(val)  # pylint: disable=not-callable
-        return True
+
+        def validate_with_validator(val: Any) -> bool:
+            if self.validator:
+                if isinstance(self.validator, LazyExpr):
+                    return self.validator(val, env=env)  # pylint: disable=not-callable
+                elif isinstance(self.validator, Callable):
+                    return self.validator(val)  # pylint: disable=not-callable
+            return True
+
+        def validate_with_expected_type(val: Any) -> bool:
+            if self.expected_type:
+                check_type(val, self.expected_type)
+            return True
+
+        return validate_with_validator(val) and validate_with_expected_type(
+            val)
