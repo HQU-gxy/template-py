@@ -51,24 +51,28 @@ class Variable(Protocol):
 
 class LiteralVariable(BaseModel):
     name: str
-    expr: LazyExpr[Any]
+    # for some reasom, LazyExpr and LazyExpr[Any] are not compatible
+    # they are not the same type
+    expr: LazyExpr
     comment: Optional[str] = None
     formatter: FormatterFn = None
-    expected_type: ExpectedType = None
+    t: ExpectedType = None
 
     class Config:
         arbitrary_types_allowed = True
 
-    # custom deserialization
-
     @validator("expr", pre=True)
-    def _parse_expr(cls, v: str | LazyExprDict) -> LazyExpr[Any]:  # pylint: disable=no-self-argument
+    def _parse_expr(cls, v: str | LazyExprDict | LazyExpr) -> LazyExpr[Any]:  # pylint: disable=no-self-argument
         if isinstance(v, dict):
             return LazyExpr(**v)
-        return LazyExpr(raw=v)
+        elif isinstance(v, str):
+            return LazyExpr(raw=v)
+        elif isinstance(v, LazyExpr):
+            return v
 
     @validator("formatter", pre=True)
-    def _parse_formatter(cls, v: str | LazyExprDict | None) -> FormatterFn:  # pylint: disable=no-self-argument
+    def _parse_formatter(  # pylint: disable=no-self-argument
+            cls, v: str | LazyExprDict | LazyExpr | None) -> FormatterFn:
         # TODO: handle imports
         if isinstance(v, dict):
             return LazyExpr(**v)
@@ -77,13 +81,17 @@ class LiteralVariable(BaseModel):
             if len(s) == 0:
                 return None
             return LazyExpr(raw=s)
+        elif isinstance(v, LazyExpr):
+            return v
         else:
             return None
 
-    @validator("expected_type", pre=True)
-    def _parse_expected_type(cls, v: Optional[str]) -> ExpectedType:  # pylint: disable=no-self-argument
+    @validator("t", pre=True)
+    def _parse_expected_type(cls, v: str | type | None) -> ExpectedType:  # pylint: disable=no-self-argument
         if v is None:
             return None
+        if isinstance(v, type):
+            return v
         expr = LazyExpr(raw=v)
         t = expr.eval()
         if not isinstance(t, type):
@@ -130,8 +138,8 @@ class LiteralVariable(BaseModel):
         val = self.value(env)
 
         def validate_with_expected_type(val: Any) -> bool:
-            if self.expected_type:
-                check_type(val, self.expected_type)
+            if self.t:
+                check_type(val, self.t)
             return True
 
         return validate_with_expected_type(val)
