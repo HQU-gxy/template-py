@@ -1,6 +1,6 @@
 from enum import Enum, auto
 from io import TextIOWrapper
-from pydantic import BaseModel
+from pydantic import BaseModel, validator
 from typing import Dict, Any, Optional, Union, Final, Callable
 from typing_extensions import Protocol, runtime_checkable
 from typeguard import typechecked
@@ -11,10 +11,12 @@ import httpx
 # ujson also works
 import orjson as json
 
+SOURCE_TYPE_KEY = "source_type"
+
 
 class SourceType(Enum):
-    JSON = auto()
-    API = auto()
+    JSON = "json"
+    API = "api"
 
 
 # str is could be parsed as file path or url
@@ -144,6 +146,21 @@ class APISource(BaseModel):
     comment: Optional[str] = None
     schema: JsonSchemaLoader = None
 
+    class Config:
+        exclude = ["SOURCE_TYPE"]
+
+    def __init__(self,
+                 name: str,
+                 url: str,
+                 comment: Optional[str] = None,
+                 schema: JsonSchemaLoader = None,
+                 **data):
+        super().__init__(name=name,
+                         url=url,
+                         comment=comment,
+                         schema=schema,
+                         **data)
+
     @staticmethod
     def source_type() -> SourceType:
         return APISource.SOURCE_TYPE
@@ -192,6 +209,21 @@ class JsonSource(BaseModel):
     comment: Optional[str] = None
     schema: JsonSchemaLoader = None
 
+    class Config:
+        exclude = ["SOURCE_TYPE"]
+
+    def __init__(self,
+                 name: str,
+                 url: str,
+                 comment: Optional[str] = None,
+                 schema: JsonSchemaLoader = None,
+                 **data):
+        super().__init__(name=name,
+                         url=url,
+                         comment=comment,
+                         schema=schema,
+                         **data)
+
     @staticmethod
     def source_type() -> SourceType:
         return JsonSource.SOURCE_TYPE
@@ -228,3 +260,15 @@ class JsonSource(BaseModel):
         Verifies the data with the schema
         """
         return verify(content, self.schema)
+
+
+def unmarshal_data_source(data: Dict[str, Any]) -> DataSource:
+    source_type = data.get(SOURCE_TYPE_KEY)
+    if source_type is None:
+        raise ValueError(f"source type is required")
+    if source_type == SourceType.JSON:
+        return JsonSource(**data)
+    elif source_type == SourceType.API:
+        return APISource(**data)
+    else:
+        raise ValueError(f"unknown source type: {source_type}")
