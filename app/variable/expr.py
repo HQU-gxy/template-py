@@ -1,4 +1,4 @@
-from typing import Dict, Any, Optional, Callable, TypeVar, Union, List, Generic, Final
+from typing import Dict, Any, Optional, Callable, TypeVar, TypedDict, Union, List, Generic, Final, NotRequired
 from typeguard import check_type
 import warnings
 import ast
@@ -11,6 +11,11 @@ T = TypeVar("T")
 
 MAGIC_FN_NAME: Final[str] = UnboundVariableFinder.MAGIC_FN_NAME
 RAW_MAGIC: Final[str] = "__raw__"
+
+
+class LazyExprDict(TypedDict):
+    raw: str
+    imports: NotRequired[List[str]]
 
 
 class LazyExpr(BaseModel, Generic[T]):
@@ -81,7 +86,7 @@ class LazyExpr(BaseModel, Generic[T]):
 
     def eval(self,
              env: Optional[Dict[str, Any]] = None,
-             is_type_check=True) -> T:
+             is_type_check: bool = True) -> T:
         """
         Evaluates the LazyExpr and returns the result
 

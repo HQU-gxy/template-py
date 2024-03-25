@@ -1,11 +1,11 @@
 from enum import Enum, auto
-from altair import LayerChart
+from altair import Field, LayerChart
 from pexpect import ExceptionPexpect
-from pydantic import BaseModel
+from pydantic import BaseModel, PrivateAttr, validator, root_validator
 from typing import Dict, Any, List, Optional, Callable, Set
 from typing_extensions import Protocol, TypedDict, runtime_checkable, NotRequired
 from result import Result, Ok, Err
-from .expr import LazyExpr, EnvDict
+from .expr import LazyExpr, EnvDict, LazyExprDict
 from app.data_source.model import DataSource
 from functools import lru_cache
 from typeguard import check_type, typechecked
@@ -49,79 +49,54 @@ class Variable(Protocol):
         return True
 
 
-class LiteralVariableDict(TypedDict):
+class LiteralVariable(BaseModel):
     name: str
-    comment: Optional[str]
-    formatter: NotRequired[str]
-    expected_type: NotRequired[str]
-    value: str
-
-
-class LiteralVariable(Variable):
-    _name: str
-    _comment: Optional[str] = None
+    expr: LazyExpr[Any]
+    comment: Optional[str] = None
     formatter: FormatterFn = None
-    _value: LazyExpr
+    expected_type: ExpectedType = None
 
-    def __init__(self,
-                 name: str,
-                 value: LazyExpr,
-                 comment: Optional[str] = None,
-                 formatter: FormatterFn = None,
-                 expected_type: ExpectedType = None):
-        self._name = name
-        self._value = value
-        self.formatter = formatter
-        self._comment = comment
-        self._expected_type = expected_type
+    class Config:
+        arbitrary_types_allowed = True
 
-    @staticmethod
-    def from_dict(
-        data: LiteralVariableDict,
-        imports: Optional[List[str]] = None
-    ) -> Result["LiteralVariable", Exception]:
-        try:
-            name = data["name"]
-            comment = data["comment"]
-            value = LazyExpr(data["value"], imports)
-            formatter_ = data.get("formatter", None)
-            formatter = LazyExpr(formatter_, imports) if formatter_ and len(
-                formatter_.strip()) != 0 else None
-            expected_type_ = data.get("expected_type", None)
-            expected_type__ = LazyExpr(
-                expected_type_, imports) if expected_type_ and len(
-                    expected_type_.strip()) != 0 else None
-            expected_type___: ExpectedType = None
-            if expected_type__ is not None:
-                if (t := expected_type__.eval()) is not None and not isinstance(
-                        t, type):
-                    expected_type___ = t
-                    raise ValueError(
-                        f"Expected type must be a type. Get {t} ({type(t)})")
-            return Ok(
-                LiteralVariable(name, value, comment, formatter,
-                                expected_type___))
-        except Exception as e:
-            return Err(e)
+    # custom deserialization
 
-    @property
-    def expected_type(self) -> ExpectedType:
-        return self._expected_type
+    @validator("expr", pre=True)
+    def _parse_expr(cls, v: str | LazyExprDict) -> LazyExpr[Any]:  # pylint: disable=no-self-argument
+        if isinstance(v, dict):
+            return LazyExpr(**v)
+        return LazyExpr(raw=v)
 
-    @property
-    def name(self) -> str:
-        return self._name
+    @validator("formatter", pre=True)
+    def _parse_formatter(cls, v: str | LazyExprDict | None) -> FormatterFn:  # pylint: disable=no-self-argument
+        # TODO: handle imports
+        if isinstance(v, dict):
+            return LazyExpr(**v)
+        elif isinstance(v, str):
+            s = v.strip()
+            if len(s) == 0:
+                return None
+            return LazyExpr(raw=s)
+        else:
+            return None
 
-    @property
-    def comment(self) -> Optional[str]:
-        return self._comment
+    @validator("expected_type", pre=True)
+    def _parse_expected_type(cls, v: Optional[str]) -> ExpectedType:  # pylint: disable=no-self-argument
+        if v is None:
+            return None
+        expr = LazyExpr(raw=v)
+        t = expr.eval()
+        if not isinstance(t, type):
+            raise ValueError(
+                f"Expected type must be a type. Get {t} ({type(t)})")
+        return t
 
     def load(self, env: EnvDict = None) -> Result[Any, Exception]:
         """
         Load the value from the expression
         """
         try:
-            val = self._value.eval(env)
+            val = self.expr.eval(env)
             return Ok(val)
         except Exception as e:
             return Err(e)
@@ -129,8 +104,8 @@ class LiteralVariable(Variable):
     @property
     def unbound(self) -> set[str]:
         s: Set[str] = set()
-        if isinstance(self._value, LazyExpr):
-            s |= self._value.unbound
+        if isinstance(self.expr, LazyExpr):
+            s |= self.expr.unbound
         return s
 
     def value(self, env: EnvDict = None) -> Any:
@@ -140,19 +115,18 @@ class LiteralVariable(Variable):
         res = self.load(env)
         if res.is_err():
             raise res.unwrap_err()
-        self._evaluated_value = res.unwrap()
-        return self._evaluated_value
+        return res.unwrap()
 
-    def format(self, env: EnvDict = None) -> str:
+    def _format_impl(self, env: EnvDict = None) -> str:
         val = self.value(env)
-        if self.formatter:
+        if self.formatter is not None:
             if isinstance(self.formatter, LazyExpr):
                 return self.formatter(val, env=env)
             elif isinstance(self.formatter, Callable):
                 return self.formatter(val)
         return str(val)
 
-    def validate(self, env: EnvDict = None) -> bool:
+    def _validate_impl(self, env: EnvDict = None) -> bool:
         val = self.value(env)
 
         def validate_with_expected_type(val: Any) -> bool:
