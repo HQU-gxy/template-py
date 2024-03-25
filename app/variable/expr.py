@@ -2,30 +2,37 @@ from typing import Dict, Any, Optional, Callable, TypeVar, Union, List, Generic,
 from typeguard import check_type
 import warnings
 import ast
+from pydantic import BaseModel, PrivateAttr, validator, root_validator
 from .visitor import UnboundVariableFinder, ImportValidator
 
 EnvDict = Optional[Dict[str, Any]]
 
 T = TypeVar("T")
 
+MAGIC_FN_NAME: Final[str] = UnboundVariableFinder.MAGIC_FN_NAME
+RAW_MAGIC: Final[str] = "__raw__"
 
-class LazyExpr(Generic[T]):
+
+class LazyExpr(BaseModel, Generic[T]):
     """
     A lazy expression that can be evaluated later
     
     template parameters:
         T: the type of the expression after evaluation
     """
-    MAGIC_FN_NAME: Final[str] = UnboundVariableFinder.MAGIC_FN_NAME
-    _raw: str
-    _ast: ast.Module
-    _imports: list[str]
-    _finder: UnboundVariableFinder
+    raw: str
+    imports: Optional[List[str]]
+    _ast: ast.Module = PrivateAttr()
+    _finder: UnboundVariableFinder = PrivateAttr()
 
-    def __init__(self, raw: str, imports: Optional[list[str]] = None):
-        self._raw = raw
-        self._imports = imports if imports else []
-        preload = "\n".join(self._imports)
+    class Config:
+        exclude = ["_ast", "_finder"]
+
+    def __init__(self, raw: str, imports: Optional[List[str]] = None, **data):
+        super().__init__(raw=raw, imports=imports, **data)
+        # handle additional imports here
+        # might need some ugly hacks to handle it
+        preload = "\n".join(imports or [])
         preload_ast = ast.parse(preload)
 
         import_validator = ImportValidator()
@@ -42,7 +49,7 @@ class LazyExpr(Generic[T]):
                 "Multiple expressions in the body. Only the last one will be evaluated"
             )
 
-        func = ast.FunctionDef(name=self.MAGIC_FN_NAME,
+        func = ast.FunctionDef(name=MAGIC_FN_NAME,
                                args=ast.arguments(args=[],
                                                   vararg=None,
                                                   kwarg=None,
@@ -56,7 +63,7 @@ class LazyExpr(Generic[T]):
         self._ast = preload_ast
         ast.fix_missing_locations(self._ast)
         self._finder = UnboundVariableFinder()
-        self._finder.visit(self._ast)
+        self._finder.visit(preload_ast)
 
     @property
     def unbound(self):
@@ -66,25 +73,11 @@ class LazyExpr(Generic[T]):
         return self._finder.unbound
 
     @property
-    def imports(self):
-        """
-        Returns the set of imported variables in the function
-        """
-        return self._finder.imports
-
-    @property
     def target(self):
         """
         If the expression is a named expression (defined with walrus operator `:=`), returns the name of the variable
         """
         return self._finder.target
-
-    @property
-    def raw(self):
-        """
-        Returns the raw expression
-        """
-        return self._raw
 
     def eval(self,
              env: Optional[Dict[str, Any]] = None,
@@ -101,7 +94,7 @@ class LazyExpr(Generic[T]):
         exec(compiled, _env)
         if env:
             _env.update(env)
-        val = _env[self.MAGIC_FN_NAME]()
+        val = _env[MAGIC_FN_NAME]()
         if is_type_check:
             check_type(val, T)
         return val
