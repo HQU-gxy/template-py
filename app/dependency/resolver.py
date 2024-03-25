@@ -18,8 +18,7 @@ class DependencyResolver:
     def add(self, variable: Variable) -> Result[None, Exception]:
         valid_names = map(lambda x: x.name, self._table)
         if variable.name in valid_names:
-            return Err(
-                ValueError(f"duplicated variable name: {variable.name}"))
+            return Err(ValueError(f"duplicated variable name: {variable.name}"))
         self._table.append(variable)
         self._graph.add_node(variable.name)
         for unbound in variable.unbound:
@@ -71,8 +70,20 @@ class DependencyResolver:
                     obj = {"var": var, "exception": e}
                     return Err(
                         RuntimeError(
-                            "failed to evaluate variable `{}`".format(
-                                var.name), obj))
+                            "failed to evaluate variable `{}`".format(var.name),
+                            obj))
             self._env = env
             self._dirty = False
         return Ok(self._env)
+
+
+def resolve_env(
+        variables: Sequence[Variable]) -> Result[Dict[str, Any], Exception]:
+    """
+    Resolve the environment from the given variables
+    """
+    resolver = DependencyResolver()
+    res = resolver.add_many(variables)
+    if res.is_err():
+        return Err(res.unwrap_err())
+    return resolver.env

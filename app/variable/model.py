@@ -7,6 +7,7 @@ from typing_extensions import Protocol, TypedDict, runtime_checkable, NotRequire
 from result import Result, Ok, Err
 from .expr import LazyExpr, EnvDict
 from app.data_source.model import DataSource
+from functools import lru_cache
 from typeguard import check_type, typechecked
 from jsonpath_ng import parse, jsonpath
 
@@ -61,7 +62,6 @@ class LiteralVariable(Variable):
     _comment: Optional[str] = None
     formatter: FormatterFn = None
     _value: LazyExpr
-    _evaluated_value: ExpectedType = None
 
     def __init__(self,
                  name: str,
@@ -93,9 +93,8 @@ class LiteralVariable(Variable):
                     expected_type_.strip()) != 0 else None
             expected_type___: ExpectedType = None
             if expected_type__ is not None:
-                if (t :=
-                        expected_type__.eval()) is not None and not isinstance(
-                            t, type):
+                if (t := expected_type__.eval()) is not None and not isinstance(
+                        t, type):
                     expected_type___ = t
                     raise ValueError(
                         f"Expected type must be a type. Get {t} ({type(t)})")
@@ -136,10 +135,8 @@ class LiteralVariable(Variable):
 
     def value(self, env: EnvDict = None) -> Any:
         """
-        Check cache first, if not found, load the value from the expression
+        Load the value from the expression
         """
-        if self._evaluated_value:
-            return self._evaluated_value
         res = self.load(env)
         if res.is_err():
             raise res.unwrap_err()
@@ -234,9 +231,8 @@ class JsonPathVariable(Variable):
                     expected_type_.strip()) != 0 else None
             expected_type___: ExpectedType = None
             if expected_type__ is not None:
-                if (t :=
-                        expected_type__.eval()) is not None and not isinstance(
-                            t, type):
+                if (t := expected_type__.eval()) is not None and not isinstance(
+                        t, type):
                     expected_type___ = t
                     raise ValueError(
                         f"Expected type must be a type. Get {t} ({type(t)})")
@@ -336,8 +332,7 @@ class JsonPathVariable(Variable):
                 check_type(val, self.expected_type)
             return True
 
-        return validate_with_validator(val) and validate_with_expected_type(
-            val)
+        return validate_with_validator(val) and validate_with_expected_type(val)
 
 
 # TODO: https://docs.pydantic.dev/latest/concepts/serialization/
