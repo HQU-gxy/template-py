@@ -1,5 +1,5 @@
 from enum import Enum, auto
-from pydantic import BaseModel, PrivateAttr, validator, root_validator
+from pydantic import BaseModel, Field, PrivateAttr, model_validator, validator, root_validator
 from typing import Dict, Any, List, Optional, Callable, Set
 from typing_extensions import Protocol, TypedDict, runtime_checkable, NotRequired
 from result import Result, Ok, Err
@@ -8,6 +8,7 @@ from app.data_source.model import DataSource, unmarshal_data_source
 from functools import lru_cache
 from typeguard import check_type, typechecked
 from jsonpath_ng import parse, jsonpath
+from jsonpath_ng.exceptions import JsonPathParserError
 
 FormatterFn = Callable[[Any], str] | LazyExpr[Callable[[Any], str]]
 ValidatorFn = Callable[[Any], bool] | LazyExpr[Callable[[Any], bool]]
@@ -16,6 +17,18 @@ NullableType = Optional[type]
 
 LazyExprLike = str | LazyExprDict | LazyExpr
 ImportsLike = List[str]
+
+__global_imports__: ImportsLike = []
+
+
+def set_global_imports(imports: ImportsLike):
+    global __global_imports__
+    __global_imports__ = imports
+
+
+def global_imports() -> ImportsLike:
+    global __global_imports__
+    return __global_imports__
 
 
 def common_parse_expr(expr: LazyExprLike,
@@ -27,7 +40,7 @@ def common_parse_expr(expr: LazyExprLike,
     elif isinstance(expr, str):
         return LazyExpr(raw=expr, imports=imports)
     elif isinstance(expr, LazyExpr):
-        if imports:
+        if imports is not None:
             imports_ = expr.imports if expr.imports else []
             return LazyExpr(raw=expr.raw, imports=[*imports, *imports_])
         return expr
@@ -116,10 +129,6 @@ class Variable(Protocol):
     def unbound(self) -> set[str]:
         ...
 
-    @classmethod
-    def set_default_imports(cls, imports: ImportsLike):
-        ...
-
     def load(self, env: EnvDict = None) -> Result[Any, Exception]:
         ...
 
@@ -135,37 +144,50 @@ class LiteralVariable(BaseModel):
     LiteralVariable represents a variable that has a expression that can be evaluated to a value
     """
     name: str
-    # for some reasom, LazyExpr and LazyExpr[Any] are not compatible
+    # for some reason, LazyExpr and LazyExpr[Any] are not compatible
     # they are not the same type
     expr: LazyExpr
     comment: Optional[str] = None
     formatter: Optional[FormatterFn] = None
     t: NullableType = None
-    _imports: Optional[ImportsLike] = PrivateAttr(default=None)
+    _inst_imports: Optional[ImportsLike] = PrivateAttr(default=None)
 
     class Config:
         arbitrary_types_allowed = True
 
-    @classmethod
-    def set_default_imports(cls, imports: ImportsLike):
-        cls._imports = imports
+    def __init__(self,
+                 name: str,
+                 expr: LazyExpr,
+                 comment: Optional[str] = None,
+                 formatter: Optional[FormatterFn] = None,
+                 t: NullableType = None,
+                 imports: Optional[ImportsLike] = None,
+                 **data):
+        super().__init__(name=name,
+                         expr=expr,
+                         comment=comment,
+                         formatter=formatter,
+                         t=t,
+                         _inst_imports=imports,
+                         **data)
 
     @property
-    def default_imports(self):
-        return self._imports
+    def imports(self):
+        a = self._inst_imports if self._inst_imports else []
+        b = global_imports()
+        return [*a, *b]
 
-    @validator("expr", pre=True)
-    def _parse_expr(cls, v: LazyExprLike) -> LazyExpr[Any]:  # pylint: disable=no-self-argument
-        return common_parse_expr(v, cls._imports)
-
-    @validator("formatter", pre=True)
-    def _parse_formatter(  # pylint: disable=no-self-argument
-            cls, v: Optional[LazyExprLike]) -> Optional[FormatterFn]:
-        return nullable_common_parse_expr(v, cls._imports)
-
-    @validator("t", pre=True)
-    def _parse_expected_type(cls, v: str | type | None) -> NullableType:  # pylint: disable=no-self-argument
-        return common_parse_type(v, cls._imports)
+    @model_validator(mode="before")
+    def _preprocess_expressions(cls, values):  # pylint: disable=no-self-argument
+        inst_imports = values.get("_inst_imports") or []
+        imports = [*inst_imports, *global_imports()]
+        expr_ = values.get("expr")
+        values["expr"] = common_parse_expr(expr_, imports)
+        formatter_ = values.get("formatter")
+        values["formatter"] = nullable_common_parse_expr(formatter_, imports)
+        t_ = values.get("t")
+        values["t"] = common_parse_type(t_, imports)
+        return values
 
     def load(self, env: EnvDict = None) -> Result[Any, Exception]:
         """
@@ -205,34 +227,52 @@ class PathVariable(BaseModel):
     preprocessor: Optional[PreprocessorFn] = None
     # the type that after preprocessing
     t: NullableType = None
-    _imports: Optional[ImportsLike] = PrivateAttr(default=None)
+    _inst_imports: Optional[ImportsLike] = PrivateAttr(default=None)
 
-    @classmethod
-    def set_default_imports(cls, imports: ImportsLike):
-        cls._imports = imports
+    def __init__(self,
+                 name: str,
+                 source: Dict[str, Any],
+                 json_path: str,
+                 comment: Optional[str] = None,
+                 formatter: Optional[FormatterFn] = None,
+                 verifier: Optional[ValidatorFn] = None,
+                 preprocessor: Optional[PreprocessorFn] = None,
+                 t: NullableType = None,
+                 imports: Optional[ImportsLike] = None,
+                 **data):
+        super().__init__(name=name,
+                         source=source,
+                         json_path=json_path,
+                         comment=comment,
+                         formatter=formatter,
+                         verifier=verifier,
+                         preprocessor=preprocessor,
+                         t=t,
+                         _inst_imports=imports,
+                         **data)
 
     @property
-    def default_imports(self):
-        return self._imports
+    def imports(self):
+        a = self._inst_imports if self._inst_imports else []
+        b = global_imports()
+        return [*a, *b]
 
-    @validator("formatter", pre=True)
-    def _parse_formatter(  # pylint: disable=no-self-argument
-            cls, v: Optional[LazyExprLike]) -> Optional[FormatterFn]:
-        return nullable_common_parse_expr(v, cls._imports)
-
-    @validator("verifier", pre=True)
-    def _parse_verifier(  # pylint: disable=no-self-argument
-            cls, v: Optional[LazyExprLike]) -> Optional[ValidatorFn]:
-        return nullable_common_parse_expr(v, cls._imports)
-
-    @validator("preprocessor", pre=True)
-    def _parse_preprocessor(  # pylint: disable=no-self-argument
-            cls, v: Optional[LazyExprLike]) -> Optional[PreprocessorFn]:
-        return nullable_common_parse_expr(v, cls._imports)
-
-    @validator("t", pre=True)
-    def _parse_expected_type(cls, v: str | type | None) -> NullableType:  # pylint: disable=no-self-argument
-        return common_parse_type(v)
+    @model_validator(mode="before")
+    def _preprocess_expressions(cls, values):  # pylint: disable=no-self-argument
+        inst_imports = values.get("_inst_imports") or []
+        imports = [*inst_imports, *global_imports()]
+        expr_ = values.get("expr")
+        values["expr"] = common_parse_expr(expr_, imports)
+        formatter_ = values.get("formatter")
+        values["formatter"] = nullable_common_parse_expr(formatter_, imports)
+        t_ = values.get("t")
+        preprocessor_ = values.get("preprocessor")
+        values["preprocessor"] = nullable_common_parse_expr(
+            preprocessor_, imports)
+        verifier_ = values.get("verifier")
+        values["verifier"] = nullable_common_parse_expr(verifier_, imports)
+        values["t"] = common_parse_type(t_, imports)
+        return values
 
     @property
     def unbound(self) -> set[str]:
@@ -260,7 +300,7 @@ class PathVariable(BaseModel):
             if not match:
                 return Err(ValueError("No match found"))
             return Ok(match[0].value)
-        except Exception as e:
+        except JsonPathParserError as e:
             return Err(e)
 
     def preprocess(self, item: Any, env: EnvDict = None) -> Any:
