@@ -1,51 +1,128 @@
 from enum import Enum, auto
-from altair import Field, LayerChart
-from pexpect import ExceptionPexpect
 from pydantic import BaseModel, PrivateAttr, validator, root_validator
 from typing import Dict, Any, List, Optional, Callable, Set
 from typing_extensions import Protocol, TypedDict, runtime_checkable, NotRequired
 from result import Result, Ok, Err
 from .expr import LazyExpr, EnvDict, LazyExprDict
-from app.data_source.model import DataSource
+from app.data_source.model import DataSource, unmarshal_data_source
 from functools import lru_cache
 from typeguard import check_type, typechecked
 from jsonpath_ng import parse, jsonpath
 
-FormatterFn = Callable[[Any], str] | LazyExpr[Callable[[Any], str]] | None
-ValidatorFn = Callable[[Any], bool] | LazyExpr[Callable[[Any], bool]] | None
-PreprocessorFn = Callable[[Any], Any] | LazyExpr[Callable[[Any], Any]] | None
-ExpectedType = Optional[type]
+FormatterFn = Callable[[Any], str] | LazyExpr[Callable[[Any], str]]
+ValidatorFn = Callable[[Any], bool] | LazyExpr[Callable[[Any], bool]]
+PreprocessorFn = Callable[[Any], Any] | LazyExpr[Callable[[Any], Any]]
+NullableType = Optional[type]
+
+LazyExprLike = str | LazyExprDict | LazyExpr
+ImportsLike = List[str]
+
+
+def common_parse_expr(expr: LazyExprLike,
+                      imports: Optional[ImportsLike] = None) -> LazyExpr:
+    if isinstance(expr, dict):
+        imports_ = expr.get("imports", [])
+        return LazyExpr(raw=expr["raw"],
+                        imports=[*imports, *imports_] if imports else imports_)
+    elif isinstance(expr, str):
+        return LazyExpr(raw=expr, imports=imports)
+    elif isinstance(expr, LazyExpr):
+        if imports:
+            imports_ = expr.imports if expr.imports else []
+            return LazyExpr(raw=expr.raw, imports=[*imports, *imports_])
+        return expr
+    else:
+        raise ValueError(f"Invalid type {type(expr)}")
+
+
+def common_parse_type(t: str | type | None,
+                      imports: Optional[ImportsLike] = None) -> NullableType:
+    if t is None:
+        return None
+    if isinstance(t, type):
+        return t
+    expr = LazyExpr(raw=t, imports=imports)
+    t = expr.eval()
+    if not isinstance(t, type):
+        raise ValueError(f"Expected type must be a type. Get {t} ({type(t)})")
+    return t
+
+
+def nullable_common_parse_expr(
+        expr: Optional[LazyExprLike],
+        imports: Optional[ImportsLike] = None) -> LazyExpr | None:
+    if expr is None:
+        return None
+    return common_parse_expr(expr, imports)
+
+
+def common_format_impl(val: Any,
+                       formatter: Optional[FormatterFn],
+                       env: EnvDict = None) -> str:
+    if formatter is not None:
+        if isinstance(formatter, LazyExpr):
+            return formatter(val, env=env)
+        elif isinstance(formatter, Callable):
+            return formatter(val)
+        else:
+            raise ValueError(f"Invalid formatter type {type(formatter)}")
+    return str(val)
+
+
+def common_preprocess_impl(val: Any,
+                           preprocessor: Optional[PreprocessorFn],
+                           env: EnvDict = None) -> Any:
+    if preprocessor is not None:
+        if isinstance(preprocessor, LazyExpr):
+            return preprocessor(val, env=env)
+        elif isinstance(preprocessor, Callable):
+            return preprocessor(val)
+        else:
+            raise ValueError(f"Invalid preprocessor type {type(preprocessor)}")
+
+
+def common_verify_impl(val: Any,
+                       verifier: Optional[ValidatorFn],
+                       t: NullableType = None,
+                       env: EnvDict = None) -> bool:
+
+    def validate_with_verifier(val: Any) -> bool:
+        if verifier:
+            if isinstance(verifier, LazyExpr):
+                return verifier(val, env=env)
+            elif isinstance(verifier, Callable):
+                return verifier(val)
+        return True
+
+    def validate_with_expected_type(val: Any) -> bool:
+        if t:
+            try:
+                check_type(val, t)
+            except TypeError:
+                return False
+        return True
+
+    return validate_with_verifier(val) and validate_with_expected_type(val)
 
 
 @runtime_checkable
 class Variable(Protocol):
-
-    def load(self, env: EnvDict = None) -> Result[Any, Exception]:
-        ...
-
-    def value(self, env: EnvDict = None) -> Any:
-        ...
 
     @property
     def name(self) -> str:
         ...
 
     @property
-    def comment(self) -> Optional[str]:
-        ...
-
-    @property
     def unbound(self) -> set[str]:
         ...
 
-    @property
-    def expected_type(self) -> ExpectedType:
+    def load(self, env: EnvDict = None) -> Result[Any, Exception]:
         ...
 
     def format(self, env: EnvDict = None) -> str:
-        return str(self.value)
+        ...
 
-    def validate(self, env: EnvDict = None) -> bool:
+    def verify(self, env: EnvDict = None) -> bool:
         return True
 
 
@@ -55,49 +132,24 @@ class LiteralVariable(BaseModel):
     # they are not the same type
     expr: LazyExpr
     comment: Optional[str] = None
-    formatter: FormatterFn = None
-    t: ExpectedType = None
+    formatter: Optional[FormatterFn] = None
+    t: NullableType = None
 
     class Config:
         arbitrary_types_allowed = True
 
     @validator("expr", pre=True)
-    def _parse_expr(cls, v: str | LazyExprDict | LazyExpr) -> LazyExpr[Any]:  # pylint: disable=no-self-argument
-        if isinstance(v, dict):
-            return LazyExpr(**v)
-        elif isinstance(v, str):
-            return LazyExpr(raw=v)
-        elif isinstance(v, LazyExpr):
-            return v
+    def _parse_expr(cls, v: LazyExprLike) -> LazyExpr[Any]:  # pylint: disable=no-self-argument
+        return common_parse_expr(v)
 
     @validator("formatter", pre=True)
     def _parse_formatter(  # pylint: disable=no-self-argument
-            cls, v: str | LazyExprDict | LazyExpr | None) -> FormatterFn:
-        # TODO: handle imports
-        if isinstance(v, dict):
-            return LazyExpr(**v)
-        elif isinstance(v, str):
-            s = v.strip()
-            if len(s) == 0:
-                return None
-            return LazyExpr(raw=s)
-        elif isinstance(v, LazyExpr):
-            return v
-        else:
-            return None
+            cls, v: Optional[LazyExprLike]) -> Optional[FormatterFn]:
+        return nullable_common_parse_expr(v)
 
     @validator("t", pre=True)
-    def _parse_expected_type(cls, v: str | type | None) -> ExpectedType:  # pylint: disable=no-self-argument
-        if v is None:
-            return None
-        if isinstance(v, type):
-            return v
-        expr = LazyExpr(raw=v)
-        t = expr.eval()
-        if not isinstance(t, type):
-            raise ValueError(
-                f"Expected type must be a type. Get {t} ({type(t)})")
-        return t
+    def _parse_expected_type(cls, v: str | type | None) -> NullableType:  # pylint: disable=no-self-argument
+        return common_parse_type(v)
 
     def load(self, env: EnvDict = None) -> Result[Any, Exception]:
         """
@@ -116,140 +168,69 @@ class LiteralVariable(BaseModel):
             s |= self.expr.unbound
         return s
 
-    def value(self, env: EnvDict = None) -> Any:
-        """
-        Load the value from the expression
-        """
-        res = self.load(env)
-        if res.is_err():
-            raise res.unwrap_err()
-        return res.unwrap()
+    def format(self, env: EnvDict = None) -> str:
+        return common_format_impl(self.load(env).unwrap(), self.formatter, env)
 
-    def _format_impl(self, env: EnvDict = None) -> str:
-        val = self.value(env)
-        if self.formatter is not None:
-            if isinstance(self.formatter, LazyExpr):
-                return self.formatter(val, env=env)
-            elif isinstance(self.formatter, Callable):
-                return self.formatter(val)
-        return str(val)
-
-    def _validate_impl(self, env: EnvDict = None) -> bool:
-        val = self.value(env)
-
-        def validate_with_expected_type(val: Any) -> bool:
-            if self.t:
-                check_type(val, self.t)
-            return True
-
-        return validate_with_expected_type(val)
+    def verify(self, env: EnvDict = None) -> bool:
+        val = self.load(env)
+        return common_verify_impl(val.unwrap(), None, self.t, env)
 
 
-class JsonPathVariableDict(TypedDict):
+class JsonPathVariable(BaseModel):
     name: str
-    comment: Optional[str]
-    formatter: NotRequired[str]
-    validator: NotRequired[str]
-    preprocessor: NotRequired[str]
-    expected_type: NotRequired[str]
-    data_source: str
+    source: Dict[str, Any]
     json_path: str
+    comment: Optional[str] = None
+    formatter: Optional[FormatterFn] = None
+    verifier: Optional[ValidatorFn] = None
+    preprocessor: Optional[PreprocessorFn] = None
+    # the type that after preprocessing
+    t: NullableType = None
 
+    @validator("formatter", pre=True)
+    def _parse_formatter(  # pylint: disable=no-self-argument
+            cls,
+            v: str | LazyExprDict | LazyExpr | None) -> Optional[FormatterFn]:
+        return nullable_common_parse_expr(v)
 
-class JsonPathVariable(Variable):
-    _name: str
-    _comment: Optional[str] = None
-    formatter: FormatterFn = None
-    validator: ValidatorFn = None
-    preprocessor: PreprocessorFn = None
-    _data_source: DataSource
-    _json_path: str
-    _evaluated_value: ExpectedType = None
+    @validator("verifier", pre=True)
+    def _parse_verifier(  # pylint: disable=no-self-argument
+            cls,
+            v: str | LazyExprDict | LazyExpr | None) -> Optional[ValidatorFn]:
+        return nullable_common_parse_expr(v)
 
-    def __init__(self,
-                 name: str,
-                 data_source: DataSource,
-                 json_path: str,
-                 comment: Optional[str] = None,
-                 formatter: FormatterFn = None,
-                 validator: ValidatorFn = None,
-                 preprocessor: PreprocessorFn = None,
-                 expected_type: ExpectedType = None):
-        self._name = name
-        self._data_source = data_source
-        self._json_path = json_path
-        self._comment = comment
-        self.formatter = formatter
-        self.validator = validator
-        self.preprocessor = preprocessor
-        self._expected_type = expected_type
+    @validator("preprocessor", pre=True)
+    def _parse_preprocessor(  # pylint: disable=no-self-argument
+            cls, v: str | LazyExprDict | LazyExpr
+        | None) -> Optional[PreprocessorFn]:
+        return nullable_common_parse_expr(v)
 
-    @staticmethod
-    def from_dict(
-        data: JsonPathVariableDict,
-        data_sources: List[DataSource],
-        imports: Optional[List[str]] = None
-    ) -> Result["JsonPathVariable", Exception]:
-        try:
-            name = data["name"]
-            comment = data["comment"]
-            formatter_ = data.get("formatter", None)
-            formatter = LazyExpr(formatter_, imports) if formatter_ and len(
-                formatter_.strip()) != 0 else None
-            validator_ = data.get("validator", None)
-            validator = LazyExpr(validator_, imports) if validator_ and len(
-                validator_.strip()) != 0 else None
-            preprocessor_ = data.get("preprocessor", None)
-            preprocessor = LazyExpr(preprocessor_,
-                                    imports) if preprocessor_ and len(
-                                        preprocessor_.strip()) != 0 else None
-            data_source = next(
-                (ds for ds in data_sources if ds.name == data["data_source"]),
-                None)
-            json_path = data["json_path"]
-            expected_type_ = data.get("expected_type", None)
-            expected_type__ = LazyExpr(
-                expected_type_, imports) if expected_type_ and len(
-                    expected_type_.strip()) != 0 else None
-            expected_type___: ExpectedType = None
-            if expected_type__ is not None:
-                if (t := expected_type__.eval()) is not None and not isinstance(
-                        t, type):
-                    expected_type___ = t
-                    raise ValueError(
-                        f"Expected type must be a type. Get {t} ({type(t)})")
-        except Exception as e:
-            return Err(e)
-        if not data_source:
-            return Err(
-                ValueError(f"Data source {data['data_source']} not found"))
-        return Ok(
-            JsonPathVariable(name, data_source, json_path, comment, formatter,
-                             validator, preprocessor, expected_type___))
+    @validator("t", pre=True)
+    def _parse_expected_type(cls, v: str | type | None) -> NullableType:  # pylint: disable=no-self-argument
+        return common_parse_type(v)
 
     @property
-    def expected_type(self) -> ExpectedType:
-        return self._expected_type
-
-    @property
-    def name(self) -> str:
-        return self._name
-
-    @property
-    def comment(self) -> Optional[str]:
-        return self._comment
+    def unbound(self) -> set[str]:
+        s: Set[str] = set()
+        if isinstance(self.formatter, LazyExpr):
+            s |= self.formatter.unbound
+        if isinstance(self.verifier, LazyExpr):
+            s |= self.verifier.unbound
+        if isinstance(self.preprocessor, LazyExpr):
+            s |= self.preprocessor.unbound
+        return s
 
     def load(self, env: EnvDict = None) -> Result[Any, Exception]:
         """
         Load the data from the data source and apply the json path
         TODO: cache the data source loadings
         """
-        res = self._data_source.load()
-        if res.is_err():
-            return res
-        data = res.unwrap()
+        # since it's not an expression we don't need env
+        # env exists for the sake of consistency/satisfaction of the protocol
+        _env = env or {}
+        data = self.source
         try:
-            json_path_expr = parse(self._json_path)
+            json_path_expr = parse(self.json_path)
             match = json_path_expr.find(data)
             if not match:
                 return Err(ValueError("No match found"))
@@ -257,65 +238,15 @@ class JsonPathVariable(Variable):
         except Exception as e:
             return Err(e)
 
-    def value(self, env: EnvDict = None) -> Any:
-        """
-        load the value from the data source and apply the json path
-        TODO: use LRUCache
-        """
-        res = self.load()
-        if res.is_err():
-            raise res.unwrap_err()
-        return self.preprocess(res.unwrap(), env=env)
-
     def preprocess(self, item: Any, env: EnvDict = None) -> Any:
-        """
-        Run the preprocessor on the item
-        """
-        if self.preprocessor:
-            if isinstance(self.preprocessor, LazyExpr):
-                return self.preprocessor(item, env=env)  # pylint: disable=not-callable
-            if isinstance(self.preprocessor, Callable):
-                return self.preprocessor(item)  # pylint: disable=not-callable
+        if self.preprocessor is not None:
+            return common_preprocess_impl(item, self.preprocessor, env)
         return item
 
-    @property
-    def unbound(self) -> set[str]:
-        s: Set[str] = set()
-        if isinstance(self.formatter, LazyExpr):
-            s |= self.formatter.unbound
-        if isinstance(self.validator, LazyExpr):
-            s |= self.validator.unbound
-        if isinstance(self.preprocessor, LazyExpr):
-            s |= self.preprocessor.unbound
-        return s
-
     def format(self, env: EnvDict = None) -> str:
-        val = self.value(env)
-        if self.formatter:
-            if isinstance(self.formatter, LazyExpr):
-                return self.formatter(val, env=env)  # pylint: disable=not-callable
-            elif isinstance(self.formatter, Callable):
-                return self.formatter(val)  # pylint: disable=not-callable
-        return str(val)
+        return common_format_impl(self.load(env).unwrap(), self.formatter, env)
 
-    def validate(self, env: EnvDict = None) -> bool:
-        val = self.value(env)
-
-        def validate_with_validator(val: Any) -> bool:
-            if self.validator:
-                if isinstance(self.validator, LazyExpr):
-                    return self.validator(val, env=env)  # pylint: disable=not-callable
-                elif isinstance(self.validator, Callable):
-                    return self.validator(val)  # pylint: disable=not-callable
-            return True
-
-        def validate_with_expected_type(val: Any) -> bool:
-            if self.expected_type:
-                check_type(val, self.expected_type)
-            return True
-
-        return validate_with_validator(val) and validate_with_expected_type(val)
-
-
-# TODO: https://docs.pydantic.dev/latest/concepts/serialization/
-# TODO: https://docs.pydantic.dev/latest/api/config/
+    def verify(self, env: EnvDict = None) -> bool:
+        val = self.load(env)
+        return common_verify_impl(self.preprocess(val.unwrap()), self.verifier,
+                                  self.t, env)

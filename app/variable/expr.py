@@ -32,6 +32,7 @@ class LazyExpr(BaseModel, Generic[T]):
 
     class Config:
         exclude = ["_ast", "_finder"]
+        frozen = True
 
     def __init__(self, raw: str, imports: Optional[List[str]] = None, **data):
         super().__init__(raw=raw, imports=imports, **data)
