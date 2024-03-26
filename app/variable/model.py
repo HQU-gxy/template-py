@@ -10,10 +10,19 @@ from typeguard import check_type, typechecked
 from jsonpath_ng import parse, jsonpath
 from jsonpath_ng.exceptions import JsonPathParserError
 
-FormatterFn = Callable[[Any], str] | LazyExpr[Callable[[Any], str]]
-ValidatorFn = Callable[[Any], bool] | LazyExpr[Callable[[Any], bool]]
-PreprocessorFn = Callable[[Any], Any] | LazyExpr[Callable[[Any], Any]]
-NullableType = Optional[type]
+FormatterFn = Callable[[Any], str]
+LazyFormatter = LazyExpr[FormatterFn] | LazyExpr
+LazyFormatterLike = str | LazyFormatter | None
+
+ValidatorFn = Callable[[Any], bool]
+LazyValidator = LazyExpr[ValidatorFn] | LazyExpr
+LazyValidatorLike = str | LazyValidator | None
+
+PreprocessorFn = Callable[[Any], Any]
+LazyPreprocessor = LazyExpr[PreprocessorFn] | LazyExpr
+LazyPreprocessorLike = str | LazyPreprocessor | None
+
+TypeLike = Optional[type]
 
 LazyExprLike = str | LazyExprDict | LazyExpr
 ImportsLike = List[str]
@@ -49,7 +58,7 @@ def common_parse_expr(expr: LazyExprLike,
 
 
 def common_parse_type(t: str | type | None,
-                      imports: Optional[ImportsLike] = None) -> NullableType:
+                      imports: Optional[ImportsLike] = None) -> TypeLike:
     if t is None:
         return None
     if isinstance(t, type):
@@ -70,7 +79,7 @@ def nullable_common_parse_expr(
 
 
 def common_format_impl(val: Any,
-                       formatter: Optional[FormatterFn],
+                       formatter: Optional[LazyFormatter | FormatterFn],
                        env: EnvDict = None) -> str:
     if formatter is not None:
         if isinstance(formatter, LazyExpr):
@@ -83,7 +92,8 @@ def common_format_impl(val: Any,
 
 
 def common_preprocess_impl(val: Any,
-                           preprocessor: Optional[PreprocessorFn],
+                           preprocessor: Optional[LazyPreprocessor
+                                                  | PreprocessorFn],
                            env: EnvDict = None) -> Any:
     if preprocessor is not None:
         if isinstance(preprocessor, LazyExpr):
@@ -95,8 +105,8 @@ def common_preprocess_impl(val: Any,
 
 
 def common_verify_impl(val: Any,
-                       verifier: Optional[ValidatorFn],
-                       t: NullableType = None,
+                       verifier: Optional[LazyValidator | ValidatorFn],
+                       t: TypeLike = None,
                        env: EnvDict = None) -> bool:
 
     def validate_with_verifier(val: Any) -> bool:
@@ -148,19 +158,18 @@ class LiteralVariable(BaseModel):
     # they are not the same type
     expr: LazyExpr
     comment: Optional[str] = None
-    formatter: Optional[FormatterFn] = None
-    t: NullableType = None
-    _inst_imports: Optional[ImportsLike] = PrivateAttr(default=None)
+    formatter: Optional[LazyFormatter] = None
+    t: TypeLike = None
 
     class Config:
-        arbitrary_types_allowed = True
+        frozen = True
 
     def __init__(self,
                  name: str,
-                 expr: LazyExpr,
+                 expr: LazyExprLike,
                  comment: Optional[str] = None,
-                 formatter: Optional[FormatterFn] = None,
-                 t: NullableType = None,
+                 formatter: LazyFormatterLike = None,
+                 t: TypeLike = None,
                  imports: Optional[ImportsLike] = None,
                  **data):
         super().__init__(name=name,
@@ -170,12 +179,6 @@ class LiteralVariable(BaseModel):
                          t=t,
                          _inst_imports=imports,
                          **data)
-
-    @property
-    def imports(self):
-        a = self._inst_imports if self._inst_imports else []
-        b = global_imports()
-        return [*a, *b]
 
     @model_validator(mode="before")
     def _preprocess_expressions(cls, values):  # pylint: disable=no-self-argument
@@ -222,22 +225,24 @@ class PathVariable(BaseModel):
     source: Dict[str, Any]
     json_path: str
     comment: Optional[str] = None
-    formatter: Optional[FormatterFn] = None
-    verifier: Optional[ValidatorFn] = None
-    preprocessor: Optional[PreprocessorFn] = None
+    formatter: Optional[LazyFormatter] = None
+    verifier: Optional[LazyValidator] = None
+    preprocessor: Optional[LazyPreprocessor] = None
     # the type that after preprocessing
-    t: NullableType = None
-    _inst_imports: Optional[ImportsLike] = PrivateAttr(default=None)
+    t: TypeLike = None
+
+    class Config:
+        frozen = True
 
     def __init__(self,
                  name: str,
                  source: Dict[str, Any],
                  json_path: str,
                  comment: Optional[str] = None,
-                 formatter: Optional[FormatterFn] = None,
-                 verifier: Optional[ValidatorFn] = None,
-                 preprocessor: Optional[PreprocessorFn] = None,
-                 t: NullableType = None,
+                 formatter: LazyFormatterLike = None,
+                 verifier: LazyValidatorLike = None,
+                 preprocessor: LazyPreprocessorLike = None,
+                 t: TypeLike = None,
                  imports: Optional[ImportsLike] = None,
                  **data):
         super().__init__(name=name,
@@ -250,12 +255,6 @@ class PathVariable(BaseModel):
                          t=t,
                          _inst_imports=imports,
                          **data)
-
-    @property
-    def imports(self):
-        a = self._inst_imports if self._inst_imports else []
-        b = global_imports()
-        return [*a, *b]
 
     @model_validator(mode="before")
     def _preprocess_expressions(cls, values):  # pylint: disable=no-self-argument
