@@ -116,6 +116,10 @@ class Variable(Protocol):
     def unbound(self) -> set[str]:
         ...
 
+    @classmethod
+    def set_default_imports(cls, imports: ImportsLike):
+        ...
+
     def load(self, env: EnvDict = None) -> Result[Any, Exception]:
         ...
 
@@ -127,6 +131,9 @@ class Variable(Protocol):
 
 
 class LiteralVariable(BaseModel):
+    """
+    LiteralVariable represents a variable that has a expression that can be evaluated to a value
+    """
     name: str
     # for some reasom, LazyExpr and LazyExpr[Any] are not compatible
     # they are not the same type
@@ -134,22 +141,31 @@ class LiteralVariable(BaseModel):
     comment: Optional[str] = None
     formatter: Optional[FormatterFn] = None
     t: NullableType = None
+    _imports: Optional[ImportsLike] = PrivateAttr(default=None)
 
     class Config:
         arbitrary_types_allowed = True
 
+    @classmethod
+    def set_default_imports(cls, imports: ImportsLike):
+        cls._imports = imports
+
+    @property
+    def default_imports(self):
+        return self._imports
+
     @validator("expr", pre=True)
     def _parse_expr(cls, v: LazyExprLike) -> LazyExpr[Any]:  # pylint: disable=no-self-argument
-        return common_parse_expr(v)
+        return common_parse_expr(v, cls._imports)
 
     @validator("formatter", pre=True)
     def _parse_formatter(  # pylint: disable=no-self-argument
             cls, v: Optional[LazyExprLike]) -> Optional[FormatterFn]:
-        return nullable_common_parse_expr(v)
+        return nullable_common_parse_expr(v, cls._imports)
 
     @validator("t", pre=True)
     def _parse_expected_type(cls, v: str | type | None) -> NullableType:  # pylint: disable=no-self-argument
-        return common_parse_type(v)
+        return common_parse_type(v, cls._imports)
 
     def load(self, env: EnvDict = None) -> Result[Any, Exception]:
         """
@@ -176,7 +192,10 @@ class LiteralVariable(BaseModel):
         return common_verify_impl(val.unwrap(), None, self.t, env)
 
 
-class JsonPathVariable(BaseModel):
+class PathVariable(BaseModel):
+    """
+    PathVariable represents a variable that can be extracted from a dictionary-like structure
+    """
     name: str
     source: Dict[str, Any]
     json_path: str
@@ -186,24 +205,30 @@ class JsonPathVariable(BaseModel):
     preprocessor: Optional[PreprocessorFn] = None
     # the type that after preprocessing
     t: NullableType = None
+    _imports: Optional[ImportsLike] = PrivateAttr(default=None)
+
+    @classmethod
+    def set_default_imports(cls, imports: ImportsLike):
+        cls._imports = imports
+
+    @property
+    def default_imports(self):
+        return self._imports
 
     @validator("formatter", pre=True)
     def _parse_formatter(  # pylint: disable=no-self-argument
-            cls,
-            v: str | LazyExprDict | LazyExpr | None) -> Optional[FormatterFn]:
-        return nullable_common_parse_expr(v)
+            cls, v: Optional[LazyExprLike]) -> Optional[FormatterFn]:
+        return nullable_common_parse_expr(v, cls._imports)
 
     @validator("verifier", pre=True)
     def _parse_verifier(  # pylint: disable=no-self-argument
-            cls,
-            v: str | LazyExprDict | LazyExpr | None) -> Optional[ValidatorFn]:
-        return nullable_common_parse_expr(v)
+            cls, v: Optional[LazyExprLike]) -> Optional[ValidatorFn]:
+        return nullable_common_parse_expr(v, cls._imports)
 
     @validator("preprocessor", pre=True)
     def _parse_preprocessor(  # pylint: disable=no-self-argument
-            cls, v: str | LazyExprDict | LazyExpr
-        | None) -> Optional[PreprocessorFn]:
-        return nullable_common_parse_expr(v)
+            cls, v: Optional[LazyExprLike]) -> Optional[PreprocessorFn]:
+        return nullable_common_parse_expr(v, cls._imports)
 
     @validator("t", pre=True)
     def _parse_expected_type(cls, v: str | type | None) -> NullableType:  # pylint: disable=no-self-argument
