@@ -1,6 +1,6 @@
 from enum import Enum, auto
 from pydantic import BaseModel, Field, PrivateAttr, model_validator, validator, root_validator
-from typing import Dict, Any, List, Optional, Callable, Sequence, Set
+from typing import Dict, Any, List, Optional, Callable, Sequence, Set, TypeVar, cast
 from typing_extensions import Protocol, TypedDict, runtime_checkable, NotRequired
 from result import Result, Ok, Err
 from .expr import LazyExpr, EnvDict, LazyExprDict
@@ -9,6 +9,9 @@ from functools import lru_cache
 from typeguard import check_type, typechecked
 from jsonpath_ng import parse, jsonpath
 from jsonpath_ng.exceptions import JsonPathParserError
+
+T = TypeVar("T")
+U = TypeVar("U")
 
 FormatterFn = Callable[[Any], str]
 LazyFormatter = LazyExpr[FormatterFn] | LazyExpr
@@ -91,23 +94,47 @@ def _common_format_impl(val: Any,
     return str(val)
 
 
-def _common_preprocess_impl(val: Any,
-                            preprocessor: Optional[LazyPreprocessor |
-                                                   PreprocessorFn],
-                            env: EnvDict = None) -> Any:
+def _common_preprocess_impl(val: T,
+                            preprocessor: LazyExpr[Callable[[T], U]]
+                            | Callable[[T], U] | None,
+                            env: EnvDict = None) -> Result[U, Exception]:
     if preprocessor is not None:
         if isinstance(preprocessor, LazyExpr):
-            return preprocessor(val, env=env)
+            try:
+                v = cast(U, preprocessor(val, env=env))
+                return Ok(v)
+            except Exception as e:
+                return Err(e)
         elif isinstance(preprocessor, Callable):
-            return preprocessor(val)
+            try:
+                return Ok(preprocessor(val))
+            except Exception as e:
+                return Err(e)
         else:
-            raise ValueError(f"Invalid preprocessor type {type(preprocessor)}")
+            return Err(
+                ValueError(f"Invalid preprocessor type {type(preprocessor)}"))
+    # T == U in this case since there is no preprocessor
+    v = cast(U, val)
+    return Ok(v)
 
 
-def _common_verify_impl(val: Any,
+def _common_verify_impl(val: T,
                         verifier: Optional[LazyValidator | ValidatorFn],
                         t: TypeLike = None,
-                        env: EnvDict = None) -> bool:
+                        env: EnvDict = None) -> Result[T, Exception]:
+    """
+    Verify the value with the verifier and the expected type
+    
+    Args:
+    - val: the value to be verified
+    - verifier: the verifier to be used
+    - t: the expected type
+    - env: the environment to be used for the verifier
+    
+    Returns:
+    - Result[T, Exception]: the value itself if the verification is successful,
+    otherwise an error
+    """
 
     def validate_with_verifier(val: Any) -> bool:
         if verifier:
@@ -117,15 +144,17 @@ def _common_verify_impl(val: Any,
                 return verifier(val)
         return True
 
-    def validate_with_expected_type(val: Any) -> bool:
+    def validate_with_expected_type(val: T) -> Result[T, Exception]:
         if t:
             try:
                 check_type(val, t)
-            except TypeError:
-                return False
-        return True
+            except TypeError as e:
+                return Err(e)
+        return Ok(val)
 
-    return validate_with_verifier(val) and validate_with_expected_type(val)
+    if not validate_with_verifier(val):
+        return Err(ValueError("failed to validate with verifier"))
+    return validate_with_expected_type(val)
 
 
 @runtime_checkable
@@ -147,12 +176,6 @@ class IVariable(Protocol):
         maybe throw an error if the formatter is not callable
         """
         ...
-
-    def format(self, env: EnvDict = None) -> str:
-        ...
-
-    def verify(self, env: EnvDict = None) -> bool:
-        return True
 
 
 def _common_eval_formatter(formatter: Optional[LazyFormatter],
@@ -214,15 +237,22 @@ class LiteralVariable(BaseModel):
         values["t"] = _common_parse_type(t_, imports)
         return values
 
-    def load(self, env: EnvDict = None) -> Result[Any, Exception]:
-        """
-        Load the value from the expression
-        """
+    def _load_unchecked(self, env: EnvDict = None) -> Result[Any, Exception]:
         try:
             val = self.expr.eval(env)
             return Ok(val)
         except Exception as e:
             return Err(e)
+
+    def load(self, env: EnvDict = None) -> Result[Any, Exception]:
+        val = self._load_unchecked(env).and_then(
+            lambda x: _common_verify_impl(x, None, self.t, env))
+        match val:
+            case Ok(_):
+                return Ok(val.unwrap())
+            case Err(e):
+                return Err(
+                    ValueError(f"failed to verify value: {self.name}", e))
 
     @property
     def unbound(self) -> set[str]:
@@ -233,13 +263,6 @@ class LiteralVariable(BaseModel):
 
     def eval_formatter(self, env: EnvDict = None) -> Optional[FormatterFn]:
         return _common_eval_formatter(self.formatter, env)
-
-    def format(self, env: EnvDict = None) -> str:
-        return _common_format_impl(self.load(env).unwrap(), self.formatter, env)
-
-    def verify(self, env: EnvDict = None) -> bool:
-        val = self.load(env)
-        return _common_verify_impl(val.unwrap(), None, self.t, env)
 
 
 class PathVariable(BaseModel):
@@ -309,23 +332,29 @@ class PathVariable(BaseModel):
             s |= self.preprocessor.unbound
         return s
 
-    def load(self, env: EnvDict = None) -> Result[Any, Exception]:
-        """
-        Load the data from the data source and apply the json path
-        TODO: cache the data source loadings
-        """
-        # since it's not an expression we don't need env
-        # env exists for the sake of consistency/satisfaction of the protocol
-        _env = env or {}
+    def _load_unchecked(self) -> Result[Any, Exception]:
         data = self.source
         try:
             json_path_expr = parse(self.json_path)
             match = json_path_expr.find(data)
             if not match:
                 return Err(ValueError("No match found"))
-            return Ok(match[0].value)
+            val = match[0].value
+            return Ok(val)
         except JsonPathParserError as e:
             return Err(e)
+
+    def load(self, env: EnvDict = None) -> Result[Any, Exception]:
+        val = self._load_unchecked().and_then(
+            lambda x: _common_preprocess_impl(x, self.preprocessor, env)
+        ).and_then(
+            lambda x: _common_verify_impl(x, self.verifier, self.t, env))
+        match val:
+            case Ok(v):
+                return Ok(v)
+            case Err(e):
+                return Err(
+                    ValueError(f"failed to verify value: {self.name}", e))
 
     def preprocess(self, item: Any, env: EnvDict = None) -> Any:
         if self.preprocessor is not None:
@@ -335,19 +364,11 @@ class PathVariable(BaseModel):
     def eval_formatter(self, env: EnvDict = None) -> Optional[FormatterFn]:
         return _common_eval_formatter(self.formatter, env)
 
-    def format(self, env: EnvDict = None) -> str:
-        return _common_format_impl(self.load(env).unwrap(), self.formatter, env)
 
-    def verify(self, env: EnvDict = None) -> bool:
-        val = self.load(env)
-        return _common_verify_impl(self.preprocess(val.unwrap()), self.verifier,
-                                   self.t, env)
-
-
-async def unmarshal_variable(variable: Dict[str, Any],
-                             data_sources: Optional[
-                                 Sequence[IDataSource]] = None,
-                             imports: Optional[ImportsLike] = None) -> IVariable:
+async def unmarshal_variable(
+        variable: Dict[str, Any],
+        data_sources: Optional[Sequence[IDataSource]] = None,
+        imports: Optional[ImportsLike] = None) -> IVariable:
     """
     Unmarshal a list of variables from a dictionary
     """

@@ -28,7 +28,8 @@ class DependencyResolver:
     def add(self, variable: IVariable) -> Result[None, Exception]:
         valid_names = map(lambda x: x.name, self._table)
         if variable.name in valid_names:
-            return Err(ValueError(f"duplicated variable name: {variable.name}"))
+            return Err(
+                ValueError(f"duplicated variable name: {variable.name}"))
         self._table.append(variable)
         self._graph.add_node(variable.name)
         for unbound in variable.unbound:
@@ -44,7 +45,8 @@ class DependencyResolver:
         return Ok(None)
 
     @staticmethod
-    def _sort_by_topological(variables: List[IVariable], topological: List[str]):
+    def _sort_by_topological(variables: List[IVariable],
+                             topological: List[str]):
         index_map = {name: i for i, name in enumerate(reversed(topological))}
         # Sort the list based on the mapping
         sorted_lst = sorted(variables, key=lambda var: index_map[var.name])
@@ -91,7 +93,7 @@ class DependencyResolver:
         return [eval_var(var) for var in self._table]
 
 
-def resolve_env(
+def resolve_and_evaluate(
     variables: Sequence[IVariable]
 ) -> Result[List[EvaluatedVariable], Exception]:
     """

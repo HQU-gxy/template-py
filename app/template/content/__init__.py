@@ -7,8 +7,8 @@ from app.template.dependency.resolver import EvaluatedVariable, to_env_dict
 from app.template.variable.expr import EnvDict, LazyExpr
 from app.template.variable.model import ImportsLike
 
-SUPPORTED_TAGS = Literal["h1", "h2", "h3", "p", "em", "strong", "blockquote",
-                         "b", "i", "u"]
+SUPPORTED_TAGS = Literal["h1", "h2", "h3", "h4", "h5", "h6", "p", "em",
+                         "strong", "blockquote", "b", "i", "u"]
 
 SUPPORTED_PLOTS = Literal["line", "bar", "pie", "scatter", "histogram"]
 
@@ -21,6 +21,9 @@ class IContent(Protocol):
 
     def eval_result(self, evaluated: Sequence[EvaluatedVariable],
                     imports: Optional[ImportsLike]) -> Dict[str, Any]:
+        """
+        @warning: expected to raise exception
+        """
         ...
 
 
@@ -39,8 +42,7 @@ class HtmlParseResult(BaseModel):
         env = to_env_dict(evaluated)
         formatters = {
             var.name: var.formatter
-            for var in evaluated
-            if var.formatter is not None
+            for var in evaluated if var.formatter is not None
         }
 
         def replace_exprs(text: str) -> str:
@@ -113,8 +115,8 @@ class ColumnLikeParseResult(BaseModel):
 
 
 def _common_extract_for_column(
-        t: ColumnLikeType, items: Iterable[Tuple[str, str | NumberArray]],
-        imports: Optional[ImportsLike]
+    t: ColumnLikeType, items: Iterable[Tuple[str, str | NumberArray]],
+    imports: Optional[ImportsLike]
 ) -> Result[ColumnLikeParseResult, Exception]:
     to_be_expr = {k: v for k, v in items if isinstance(v, str)}
     to_be_literal = {k: v for k, v in items if not isinstance(v, str)}
@@ -143,7 +145,8 @@ def _common_extract_for_column(
     if any(e.is_err() for e in exprs.values()):
         return Err(
             ValueError("Failed to parse some expressions", {
-                k: v.unwrap_err() for k, v in exprs.items()
+                k: v.unwrap_err()
+                for k, v in exprs.items()
             }))
 
     filtered = {k: v.unwrap() for k, v in exprs.items() if v.is_ok()}
@@ -226,10 +229,12 @@ class TableContent(BaseModel):
     def eval_result(self,
                     evaluated: Sequence[EvaluatedVariable],
                     imports: Optional[ImportsLike] = None) -> Dict[str, Any]:
-        r = self.extract(imports)
-        if r.is_err():
-            raise r.unwrap_err()
-        return r.unwrap().eval_result(evaluated)
+        r = self.extract(imports).map(lambda x: x.eval_result(evaluated))
+        match r:
+            case Ok(v):
+                return v
+            case Err(e):
+                raise e
 
 
 def unmarshal_content(data: Dict[str, Any]) -> IContent:
