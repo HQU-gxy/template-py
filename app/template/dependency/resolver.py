@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import List, Dict, Any, Sequence, Optional
 import networkx as nx
 from result import Result, Ok, Err
-from app.template.variable.model import FormatterFn, Variable
+from app.template.variable.model import FormatterFn, IVariable
 
 
 @dataclass
@@ -17,7 +17,7 @@ def to_env_dict(variables: Sequence[EvaluatedVariable]) -> Dict[str, Any]:
 
 
 class DependencyResolver:
-    _table: list[Variable]
+    _table: list[IVariable]
     _graph: nx.DiGraph
 
     def __init__(self) -> None:
@@ -25,7 +25,7 @@ class DependencyResolver:
         self._graph = nx.DiGraph()
         self._dirty = True
 
-    def add(self, variable: Variable) -> Result[None, Exception]:
+    def add(self, variable: IVariable) -> Result[None, Exception]:
         valid_names = map(lambda x: x.name, self._table)
         if variable.name in valid_names:
             return Err(ValueError(f"duplicated variable name: {variable.name}"))
@@ -36,7 +36,7 @@ class DependencyResolver:
         return Ok(None)
 
     def add_many(self,
-                 variables: Sequence[Variable]) -> Result[None, Exception]:
+                 variables: Sequence[IVariable]) -> Result[None, Exception]:
         for var in variables:
             res = self.add(var)
             if res.is_err():
@@ -44,7 +44,7 @@ class DependencyResolver:
         return Ok(None)
 
     @staticmethod
-    def _sort_by_topological(variables: List[Variable], topological: List[str]):
+    def _sort_by_topological(variables: List[IVariable], topological: List[str]):
         index_map = {name: i for i, name in enumerate(reversed(topological))}
         # Sort the list based on the mapping
         sorted_lst = sorted(variables, key=lambda var: index_map[var.name])
@@ -73,7 +73,7 @@ class DependencyResolver:
 
         env: Dict[str, Any] = {}
 
-        def eval_var(var: Variable) -> EvaluatedVariable:
+        def eval_var(var: IVariable) -> EvaluatedVariable:
             """
             @warning: cause side effect to `env`
             """
@@ -92,7 +92,7 @@ class DependencyResolver:
 
 
 def resolve_env(
-    variables: Sequence[Variable]
+    variables: Sequence[IVariable]
 ) -> Result[List[EvaluatedVariable], Exception]:
     """
     Resolve the environment from the given variables

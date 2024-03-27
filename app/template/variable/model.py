@@ -1,10 +1,10 @@
 from enum import Enum, auto
 from pydantic import BaseModel, Field, PrivateAttr, model_validator, validator, root_validator
-from typing import Dict, Any, List, Optional, Callable, Set
+from typing import Dict, Any, List, Optional, Callable, Sequence, Set
 from typing_extensions import Protocol, TypedDict, runtime_checkable, NotRequired
 from result import Result, Ok, Err
 from .expr import LazyExpr, EnvDict, LazyExprDict
-from app.template.data_source.model import DataSource, unmarshal_data_source
+from app.template.data_source.model import IDataSource, unmarshal_data_source
 from functools import lru_cache
 from typeguard import check_type, typechecked
 from jsonpath_ng import parse, jsonpath
@@ -129,7 +129,7 @@ def _common_verify_impl(val: Any,
 
 
 @runtime_checkable
-class Variable(Protocol):
+class IVariable(Protocol):
 
     @property
     def name(self) -> str:
@@ -342,3 +342,41 @@ class PathVariable(BaseModel):
         val = self.load(env)
         return _common_verify_impl(self.preprocess(val.unwrap()), self.verifier,
                                    self.t, env)
+
+
+async def unmarshal_variable(variable: Dict[str, Any],
+                             data_sources: Optional[
+                                 Sequence[IDataSource]] = None,
+                             imports: Optional[ImportsLike] = None) -> IVariable:
+    """
+    Unmarshal a list of variables from a dictionary
+    """
+    loaded: Dict[str, Dict[str, Any]] = {}
+    if "expr" in variable:
+        return LiteralVariable(**variable, imports=imports)
+    elif "source" in variable:
+        # source would be a string that refers to the data source
+        if data_sources is None:
+            raise ValueError(
+                "Data sources must be provided to unmarshal PathVariable")
+
+        async def try_load(source_name: str) -> Dict[str, Any]:
+            if source_name in loaded:
+                return loaded[source_name]
+            source: IDataSource = next(
+                filter(lambda x: x.name == source, data_sources))
+            data = await source.load_async()
+            if data.is_err():
+                raise RuntimeError(f"Failed to load data source {source_name}",
+                                   data.unwrap_err())
+            loaded[source_name] = data.unwrap()
+            return data.unwrap()
+
+        source = variable["source"]
+        check_type(source, str)
+        source = await try_load(variable["source"])
+        # exclude the source key
+        variable.pop("source")
+        return PathVariable(source=source, **variable, imports=imports)
+    else:
+        raise ValueError("Invalid variable type")

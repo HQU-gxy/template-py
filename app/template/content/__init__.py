@@ -1,4 +1,4 @@
-from typing import Dict, Iterable, Literal, List, Sequence, Tuple, Optional
+from typing import Dict, Iterable, Literal, List, Protocol, Sequence, Tuple, Optional, Any
 from pydantic import BaseModel, validator
 from result import Result, Ok, Err
 from typeguard import check_type
@@ -15,6 +15,13 @@ SUPPORTED_PLOTS = Literal["line", "bar", "pie", "scatter", "histogram"]
 NumberArray = List[int | float]
 
 ColumnLike = Dict[str, NumberArray | str]
+
+
+class IContent(Protocol):
+
+    def eval_result(self, evaluated: Sequence[EvaluatedVariable],
+                    imports: Optional[ImportsLike]) -> Dict[str, Any]:
+        ...
 
 
 class HtmlParseResult(BaseModel):
@@ -49,7 +56,7 @@ class HtmlParseResult(BaseModel):
                 if (dep := expr.solely_dependency) is not None:
                     dep_val = env.get(dep)
                     # make sure type matches
-                    if dep_val is not None and isinstance(dep_val, type(val)):
+                    if dep_val is not None and isinstance(val, type(dep_val)):
                         formatter = formatters.get(dep)
                 mut_text = mut_text.replace(
                     f"${{{name}}}",
@@ -57,6 +64,11 @@ class HtmlParseResult(BaseModel):
             return mut_text
 
         return replace_exprs(self.text_with_hash)
+
+    def eval_result(self,
+                    evaluated: Sequence[EvaluatedVariable]) -> Dict[str, Any]:
+        r = self.load(evaluated)
+        return {"tag": self.tag, "text": r, "style": self.style}
 
 
 class ColumnParseResult(BaseModel):
@@ -83,35 +95,21 @@ ColumnLikeType = Tuple[Literal["plot"],
                        SUPPORTED_PLOTS] | Tuple[Literal["table"],
                                                 Literal["table"]]
 
-ColumnLikeParseResult = Tuple[ColumnLikeType, ColumnParseResult]
 
+class ColumnLikeParseResult(BaseModel):
+    column_type: ColumnLikeType
+    result: ColumnParseResult
 
-class HtmlContent(BaseModel):
-    tag: SUPPORTED_TAGS
-    content: str
-    style: Dict[str, str] = {}
-
-    class Config:
-        frozen = True
-
-    def extract(
-            self, imports: Optional[ImportsLike]
-    ) -> Result[HtmlParseResult, Exception]:
-        r = parse_expr(self.content)
-
-        def establish_expr(parse_result: ParseResult) -> HtmlParseResult:
-
-            def ex(pair: Tuple[str, str]):
-                name, expr = pair
-                return name, LazyExpr(expr, imports)
-
-            exprs = map(ex, ParseResult.table)
-            return HtmlParseResult(tag=self.tag,
-                                   text_with_hash=parse_result.text,
-                                   exprs=dict(exprs),
-                                   style=self.style)
-
-        return r.map(establish_expr)
+    def eval_result(self,
+                    evaluated: Sequence[EvaluatedVariable]) -> Dict[str, Any]:
+        cols = self.result.load(evaluated)
+        ret: Dict[str, Any] = {"data": cols}
+        t_k, t_v = self.column_type
+        if t_k == "plot":
+            ret["plot_type"] = t_v
+        elif t_k == "table":
+            ret["table_type"] = t_v
+        return ret
 
 
 def _common_extract_for_column(
@@ -149,8 +147,44 @@ def _common_extract_for_column(
             }))
 
     filtered = {k: v.unwrap() for k, v in exprs.items() if v.is_ok()}
-    return Ok(
-        (t, ColumnParseResult(literal_cols=to_be_literal, lazy_cols=filtered)))
+    r = ColumnParseResult(literal_cols=to_be_literal, lazy_cols=filtered)
+    return Ok(ColumnLikeParseResult(column_type=t, result=r))
+
+
+class HtmlContent(BaseModel):
+    tag: SUPPORTED_TAGS
+    content: str
+    style: Dict[str, str] = {}
+
+    class Config:
+        frozen = True
+
+    def extract(
+            self, imports: Optional[ImportsLike]
+    ) -> Result[HtmlParseResult, Exception]:
+        r = parse_expr(self.content)
+
+        def establish_expr(parse_result: ParseResult) -> HtmlParseResult:
+
+            def ex(pair: Tuple[str, str]):
+                name, expr = pair
+                return name, LazyExpr(expr, imports)
+
+            exprs = map(ex, ParseResult.table)
+            return HtmlParseResult(tag=self.tag,
+                                   text_with_hash=parse_result.text,
+                                   exprs=dict(exprs),
+                                   style=self.style)
+
+        return r.map(establish_expr)
+
+    def eval_result(self,
+                    evaluated: Sequence[EvaluatedVariable],
+                    imports: Optional[ImportsLike] = None) -> Dict[str, Any]:
+        r = self.extract(imports)
+        if r.is_err():
+            raise r.unwrap_err()
+        return r.unwrap().eval_result(evaluated)
 
 
 class PlotContent(BaseModel):
@@ -167,6 +201,14 @@ class PlotContent(BaseModel):
         t: ColumnLikeType = ("plot", self.plot_type)
         return _common_extract_for_column(t, self.data.items(), imports)
 
+    def eval_result(self,
+                    evaluated: Sequence[EvaluatedVariable],
+                    imports: Optional[ImportsLike] = None) -> Dict[str, Any]:
+        r = self.extract(imports)
+        if r.is_err():
+            raise r.unwrap_err()
+        return r.unwrap().eval_result(evaluated)
+
 
 class TableContent(BaseModel):
     table_type: Literal["table"]
@@ -175,6 +217,30 @@ class TableContent(BaseModel):
     class Config:
         frozen = True
 
-    def extract(self) -> Result[ColumnLikeParseResult, Exception]:
+    def extract(
+        self, imports: Optional[ImportsLike]
+    ) -> Result[ColumnLikeParseResult, Exception]:
         t: ColumnLikeType = ("table", "table")
-        return _common_extract_for_column(t, self.data.items(), None)
+        return _common_extract_for_column(t, self.data.items(), imports)
+
+    def eval_result(self,
+                    evaluated: Sequence[EvaluatedVariable],
+                    imports: Optional[ImportsLike] = None) -> Dict[str, Any]:
+        r = self.extract(imports)
+        if r.is_err():
+            raise r.unwrap_err()
+        return r.unwrap().eval_result(evaluated)
+
+
+def unmarshal_content(data: Dict[str, Any]) -> IContent:
+    if "tag" in data:
+        c = HtmlContent(**data)
+        return c
+    elif "plot_type" in data:
+        c = PlotContent(**data)
+        return c
+    elif "table_type" in data:
+        c = TableContent(**data)
+        return c
+    else:
+        raise ValueError("Unknown content type")

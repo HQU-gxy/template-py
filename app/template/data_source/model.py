@@ -120,7 +120,7 @@ def common_load_impl(
 
 # https://mypy.readthedocs.io/en/latest/protocols.html#using-isinstance-with-protocols
 @runtime_checkable
-class DataSource(Protocol):
+class IDataSource(Protocol):
     """
     DataSource is a protocol that defines the interface of a data source
     """
@@ -322,15 +322,15 @@ class JsonSource(BaseModel):
         return verify(content, self.json_schema)
 
 
-def unmarshal_data_source(data: Dict[str, Any]) -> DataSource:
+def unmarshal_data_source(data: Dict[str, Any]) -> IDataSource:
     source_type = data.get(SOURCE_TYPE_KEY)
     if source_type is None:
         raise ValueError("source type is required")
-    if source_type == SourceType.JSON:
+    if source_type == SourceType.JSON.value:
         return JsonSource(**data)
-    elif source_type == SourceType.API:
+    elif source_type == SourceType.API.value:
         return APISource(**data)
-    elif source_type == SourceType.DICT:
+    elif source_type == SourceType.DICT.value:
         return DictSource(**data)
     else:
         raise ValueError(f"unknown source type: {source_type}")
