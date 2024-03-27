@@ -40,8 +40,8 @@ def global_imports() -> ImportsLike:
     return __global_imports__
 
 
-def common_parse_expr(expr: LazyExprLike,
-                      imports: Optional[ImportsLike] = None) -> LazyExpr:
+def _common_parse_expr(expr: LazyExprLike,
+                       imports: Optional[ImportsLike] = None) -> LazyExpr:
     if isinstance(expr, dict):
         imports_ = expr.get("imports", [])
         return LazyExpr(raw=expr["raw"],
@@ -57,8 +57,8 @@ def common_parse_expr(expr: LazyExprLike,
         raise ValueError(f"Invalid type {type(expr)}")
 
 
-def common_parse_type(t: str | type | None,
-                      imports: Optional[ImportsLike] = None) -> TypeLike:
+def _common_parse_type(t: str | type | None,
+                       imports: Optional[ImportsLike] = None) -> TypeLike:
     if t is None:
         return None
     if isinstance(t, type):
@@ -70,17 +70,17 @@ def common_parse_type(t: str | type | None,
     return t
 
 
-def nullable_common_parse_expr(
+def _common_parse_expr_nullable(
         expr: Optional[LazyExprLike],
         imports: Optional[ImportsLike] = None) -> LazyExpr | None:
     if expr is None:
         return None
-    return common_parse_expr(expr, imports)
+    return _common_parse_expr(expr, imports)
 
 
 def _common_format_impl(val: Any,
-                       formatter: Optional[LazyFormatter | FormatterFn],
-                       env: EnvDict = None) -> str:
+                        formatter: Optional[LazyFormatter | FormatterFn],
+                        env: EnvDict = None) -> str:
     if formatter is not None:
         if isinstance(formatter, LazyExpr):
             return formatter(val, env=env)
@@ -92,9 +92,9 @@ def _common_format_impl(val: Any,
 
 
 def _common_preprocess_impl(val: Any,
-                           preprocessor: Optional[LazyPreprocessor |
-                                                  PreprocessorFn],
-                           env: EnvDict = None) -> Any:
+                            preprocessor: Optional[LazyPreprocessor |
+                                                   PreprocessorFn],
+                            env: EnvDict = None) -> Any:
     if preprocessor is not None:
         if isinstance(preprocessor, LazyExpr):
             return preprocessor(val, env=env)
@@ -105,9 +105,9 @@ def _common_preprocess_impl(val: Any,
 
 
 def _common_verify_impl(val: Any,
-                       verifier: Optional[LazyValidator | ValidatorFn],
-                       t: TypeLike = None,
-                       env: EnvDict = None) -> bool:
+                        verifier: Optional[LazyValidator | ValidatorFn],
+                        t: TypeLike = None,
+                        env: EnvDict = None) -> bool:
 
     def validate_with_verifier(val: Any) -> bool:
         if verifier:
@@ -207,11 +207,11 @@ class LiteralVariable(BaseModel):
         inst_imports = values.get("_inst_imports") or []
         imports = [*inst_imports, *global_imports()]
         expr_ = values.get("expr")
-        values["expr"] = common_parse_expr(expr_, imports)
+        values["expr"] = _common_parse_expr(expr_, imports)
         formatter_ = values.get("formatter")
-        values["formatter"] = nullable_common_parse_expr(formatter_, imports)
+        values["formatter"] = _common_parse_expr_nullable(formatter_, imports)
         t_ = values.get("t")
-        values["t"] = common_parse_type(t_, imports)
+        values["t"] = _common_parse_type(t_, imports)
         return values
 
     def load(self, env: EnvDict = None) -> Result[Any, Exception]:
@@ -286,16 +286,16 @@ class PathVariable(BaseModel):
         inst_imports = values.get("_inst_imports") or []
         imports = [*inst_imports, *global_imports()]
         expr_ = values.get("expr")
-        values["expr"] = common_parse_expr(expr_, imports)
+        values["expr"] = _common_parse_expr(expr_, imports)
         formatter_ = values.get("formatter")
-        values["formatter"] = nullable_common_parse_expr(formatter_, imports)
+        values["formatter"] = _common_parse_expr_nullable(formatter_, imports)
         t_ = values.get("t")
         preprocessor_ = values.get("preprocessor")
-        values["preprocessor"] = nullable_common_parse_expr(
+        values["preprocessor"] = _common_parse_expr_nullable(
             preprocessor_, imports)
         verifier_ = values.get("verifier")
-        values["verifier"] = nullable_common_parse_expr(verifier_, imports)
-        values["t"] = common_parse_type(t_, imports)
+        values["verifier"] = _common_parse_expr_nullable(verifier_, imports)
+        values["t"] = _common_parse_type(t_, imports)
         return values
 
     @property
@@ -341,4 +341,4 @@ class PathVariable(BaseModel):
     def verify(self, env: EnvDict = None) -> bool:
         val = self.load(env)
         return _common_verify_impl(self.preprocess(val.unwrap()), self.verifier,
-                                  self.t, env)
+                                   self.t, env)

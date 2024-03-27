@@ -27,6 +27,8 @@ class HtmlParseResult(BaseModel):
         frozen = True
 
     def load(self, evaluated: Sequence[EvaluatedVariable]) -> str:
+        # TODO: support named expressions
+        # treating them like normal expressions for now
         env = to_env_dict(evaluated)
         formatters = {
             var.name: var.formatter
@@ -35,13 +37,20 @@ class HtmlParseResult(BaseModel):
         }
 
         def replace_exprs(text: str) -> str:
-            # mut_text will be mutated by each replacement
+            # `mut_text`` will be mutated by each replacement
             mut_text = text
             for name, expr in self.exprs.items():
                 formatter = None
-                if expr.solely_dependency is not None:
-                    formatter = formatters.get(expr.solely_dependency)
+                # if the expression only depends on one variable, use its formatter
+                # we could sure it won't call any other function
+                # but not sure about the operator (+, -, *, /, etc.)
+                # we're conservative to deduce the whether use the formatter
                 val = expr.eval(env)
+                if (dep := expr.solely_dependency) is not None:
+                    dep_val = env.get(dep)
+                    # make sure type matches
+                    if dep_val is not None and isinstance(dep_val, type(val)):
+                        formatter = formatters.get(dep)
                 mut_text = mut_text.replace(
                     f"${{{name}}}",
                     formatter(val) if formatter else str(val))
@@ -105,7 +114,7 @@ class HtmlContent(BaseModel):
         return r.map(establish_expr)
 
 
-def common_extract_for_column(
+def _common_extract_for_column(
         t: ColumnLikeType, items: Iterable[Tuple[str, str | NumberArray]],
         imports: Optional[ImportsLike]
 ) -> Result[ColumnLikeParseResult, Exception]:
@@ -156,7 +165,7 @@ class PlotContent(BaseModel):
         self, imports: Optional[ImportsLike]
     ) -> Result[ColumnLikeParseResult, Exception]:
         t: ColumnLikeType = ("plot", self.plot_type)
-        return common_extract_for_column(t, self.data.items(), imports)
+        return _common_extract_for_column(t, self.data.items(), imports)
 
 
 class TableContent(BaseModel):
@@ -168,4 +177,4 @@ class TableContent(BaseModel):
 
     def extract(self) -> Result[ColumnLikeParseResult, Exception]:
         t: ColumnLikeType = ("table", "table")
-        return common_extract_for_column(t, self.data.items(), None)
+        return _common_extract_for_column(t, self.data.items(), None)
