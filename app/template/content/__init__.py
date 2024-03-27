@@ -61,7 +61,7 @@ class HtmlParseResult(BaseModel):
                     if dep_val is not None and isinstance(val, type(dep_val)):
                         formatter = formatters.get(dep)
                 mut_text = mut_text.replace(
-                    f"${{{name}}}",
+                    f"#{name}#",
                     formatter(val) if formatter else str(val))
             return mut_text
 

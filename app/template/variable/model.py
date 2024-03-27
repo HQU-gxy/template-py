@@ -6,7 +6,7 @@ from result import Result, Ok, Err
 from .expr import LazyExpr, EnvDict, LazyExprDict
 from app.template.data_source.model import IDataSource, unmarshal_data_source
 from functools import lru_cache
-from typeguard import check_type, typechecked
+from typeguard import TypeCheckError, check_type, typechecked
 from jsonpath_ng import parse, jsonpath
 from jsonpath_ng.exceptions import JsonPathParserError
 
@@ -148,7 +148,7 @@ def _common_verify_impl(val: T,
         if t:
             try:
                 check_type(val, t)
-            except TypeError as e:
+            except TypeCheckError as e:
                 return Err(e)
         return Ok(val)
 

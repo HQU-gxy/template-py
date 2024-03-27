@@ -10,7 +10,7 @@ from app.template.variable.model import ImportsLike, IVariable, unmarshal_variab
 from app.template.dependency.resolver import EvaluatedVariable, resolve_and_evaluate
 
 
-class Template(BaseModel):
+class Template(TypedDict):
     """
     as reminder, won't actually be used
     """

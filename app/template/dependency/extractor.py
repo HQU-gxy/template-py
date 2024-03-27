@@ -56,7 +56,7 @@ def _parse_step(text: str,
                 e_offset = start_offset + end + 1
                 before_expr = text[:s_offset]
                 after_expr = text[e_offset:]
-                new_text = f"{before_expr}{digest}{after_expr}"
+                new_text = f"{before_expr}#{digest}#{after_expr}"
                 next_offset = s_offset + len(digest)
                 r = ParseStepResult(text=new_text,
                                     offset=next_offset,
