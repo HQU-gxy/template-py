@@ -10,10 +10,16 @@ class ParseStepResult(BaseModel):
     hash: str
     expr: str
 
+    class Config:
+        frozen = True
+
 
 class ParseResult(BaseModel):
     text: str
     table: List[Tuple[str, str]]
+
+    class Config:
+        frozen = True
 
 
 def _parse_step(text: str,

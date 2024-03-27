@@ -34,6 +34,7 @@ class HtmlParseResult(BaseModel):
     style: Dict[str, str] = {}
 
     class Config:
+        arbitrary_types_allowed = True
         frozen = True
 
     def load(self, evaluated: Sequence[EvaluatedVariable]) -> str:
@@ -146,7 +147,7 @@ def _common_extract_for_column(
         return Err(
             ValueError("Failed to parse some expressions", {
                 k: v.unwrap_err()
-                for k, v in exprs.items()
+                for k, v in exprs.items() if v.is_err()
             }))
 
     filtered = {k: v.unwrap() for k, v in exprs.items() if v.is_ok()}
@@ -173,7 +174,7 @@ class HtmlContent(BaseModel):
                 name, expr = pair
                 return name, LazyExpr(expr, imports)
 
-            exprs = map(ex, ParseResult.table)
+            exprs = map(ex, parse_result.table)
             return HtmlParseResult(tag=self.tag,
                                    text_with_hash=parse_result.text,
                                    exprs=dict(exprs),
@@ -214,11 +215,14 @@ class PlotContent(BaseModel):
 
 
 class TableContent(BaseModel):
-    table_type: Literal["table"]
     data: ColumnLike
+    table_type: Literal["table"] = "table"
 
     class Config:
         frozen = True
+
+    def __init__(self, data: ColumnLike, **kwargs):
+        super().__init__(data=data, table_type="table", **kwargs)
 
     def extract(
         self, imports: Optional[ImportsLike]
