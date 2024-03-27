@@ -1,7 +1,7 @@
 from typing import List, Dict, Any, Sequence
 import networkx as nx
 from result import Result, Ok, Err
-from app.variable.model import Variable
+from app.template.variable.model import Variable
 
 
 class DependencyResolver:
@@ -18,8 +18,7 @@ class DependencyResolver:
     def add(self, variable: Variable) -> Result[None, Exception]:
         valid_names = map(lambda x: x.name, self._table)
         if variable.name in valid_names:
-            return Err(
-                ValueError(f"duplicated variable name: {variable.name}"))
+            return Err(ValueError(f"duplicated variable name: {variable.name}"))
         self._table.append(variable)
         self._graph.add_node(variable.name)
         for unbound in variable.unbound:
@@ -71,8 +70,8 @@ class DependencyResolver:
                     obj = {"var": var, "exception": e}
                     return Err(
                         RuntimeError(
-                            "failed to evaluate variable `{}`".format(
-                                var.name), obj))
+                            "failed to evaluate variable `{}`".format(var.name),
+                            obj))
             self._env = env
             self._dirty = False
         return Ok(self._env)

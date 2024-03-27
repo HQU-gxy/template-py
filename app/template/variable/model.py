@@ -4,7 +4,7 @@ from typing import Dict, Any, List, Optional, Callable, Set
 from typing_extensions import Protocol, TypedDict, runtime_checkable, NotRequired
 from result import Result, Ok, Err
 from .expr import LazyExpr, EnvDict, LazyExprDict
-from app.data_source.model import DataSource, unmarshal_data_source
+from app.template.data_source.model import DataSource, unmarshal_data_source
 from functools import lru_cache
 from typeguard import check_type, typechecked
 from jsonpath_ng import parse, jsonpath
@@ -180,7 +180,7 @@ class LiteralVariable(BaseModel):
                          _inst_imports=imports,
                          **data)
 
-    @model_validator(mode="before") # type: ignore
+    @model_validator(mode="before")  # type: ignore
     def _preprocess_expressions(cls, values):  # pylint: disable=no-self-argument
         inst_imports = values.get("_inst_imports") or []
         imports = [*inst_imports, *global_imports()]
