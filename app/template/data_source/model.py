@@ -15,9 +15,9 @@ SOURCE_TYPE_KEY = "source_type"
 
 
 class SourceType(Enum):
-    JSON = "json"
+    File = "file"
     API = "api"
-    DICT = "dict"
+    Dict = "dict"
 
 
 JsonSchemaDict = Dict[str, Any]
@@ -78,8 +78,8 @@ def try_load_json_schema(
             TypeError(f"schema must be a dict or a str; get {type(schema)}"))
 
 
-def verify(data: Dict[str, Any],
-           schema: JsonSchemaLoader) -> Result[None, Exception]:
+def _verify_with_schema(data: Dict[str, Any],
+                        schema: JsonSchemaLoader) -> Result[None, Exception]:
     """
     Verifies the data with the schema
     """
@@ -98,7 +98,7 @@ def verify(data: Dict[str, Any],
             return Err(e)
 
 
-def common_load_impl(
+def _common_load_impl(
         s: str, is_verify: bool,
         verify_fn: Callable[[Dict[str, Any], JsonSchemaLoader],
                             Result[None, Exception]],
@@ -150,7 +150,7 @@ class IDataSource(Protocol):
 
 
 class DictSource(BaseModel):
-    SOURCE_TYPE: Final[SourceType] = SourceType.DICT
+    SOURCE_TYPE: Final[SourceType] = SourceType.Dict
     name: str
     data: Dict[str, Any]
     comment: Optional[str] = None
@@ -180,7 +180,7 @@ class DictSource(BaseModel):
         load json file from `path`
         """
         if is_verify:
-            verify_res = verify(self.data, self.json_schema)
+            verify_res = _verify_with_schema(self.data, self.json_schema)
             if verify_res.is_err():
                 return Err(verify_res.unwrap_err())
         return Ok(self.data)
@@ -196,7 +196,7 @@ class DictSource(BaseModel):
         """
         Verifies the data with the schema
         """
-        return verify(content, self.json_schema)
+        return _verify_with_schema(content, self.json_schema)
 
 
 class APISource(BaseModel):
@@ -225,10 +225,6 @@ class APISource(BaseModel):
     def source_type() -> SourceType:
         return APISource.SOURCE_TYPE
 
-    def _load_impl(self, s: str,
-                   is_verify: bool) -> Result[Dict[str, Any], Exception]:
-        return common_load_impl(s, is_verify, verify, self.json_schema)
-
     def load(self, is_verify=True) -> Result[Dict[str, Any], Exception]:
         """load json file from `url`
 
@@ -237,7 +233,8 @@ class APISource(BaseModel):
         """
         try:
             res_ = httpx.get(self.url, timeout=5)
-            return self._load_impl(res_.text, is_verify)
+            return _common_load_impl(res_.text, is_verify, _verify_with_schema,
+                                     self.json_schema)
         except Exception as e:
             return Err(e)
 
@@ -251,7 +248,8 @@ class APISource(BaseModel):
         try:
             async with httpx.AsyncClient() as client:
                 res_ = await client.get(self.url, timeout=5)
-                return self._load_impl(res_.text, is_verify)
+                return _common_load_impl(res_.text, is_verify,
+                                         _verify_with_schema, self.json_schema)
         except Exception as e:
             return Err(e)
 
@@ -259,11 +257,11 @@ class APISource(BaseModel):
         """
         Verifies the data with the schema
         """
-        return verify(content, self.json_schema)
+        return _verify_with_schema(content, self.json_schema)
 
 
-class JsonSource(BaseModel):
-    SOURCE_TYPE: Final[SourceType] = SourceType.JSON
+class FileSource(BaseModel):
+    SOURCE_TYPE: Final[SourceType] = SourceType.File
     name: str
     path: str
     comment: Optional[str] = None
@@ -286,11 +284,7 @@ class JsonSource(BaseModel):
 
     @staticmethod
     def source_type() -> SourceType:
-        return JsonSource.SOURCE_TYPE
-
-    def _load_impl(self, s: str,
-                   is_verify: bool) -> Result[Dict[str, Any], Exception]:
-        return common_load_impl(s, is_verify, verify, self.json_schema)
+        return FileSource.SOURCE_TYPE
 
     def load(self, is_verify=True) -> Result[Dict[str, Any], Exception]:
         """
@@ -299,7 +293,8 @@ class JsonSource(BaseModel):
         with open(self.path, "r", encoding="utf-8") as f:
             try:
                 s = f.read()
-                return self._load_impl(s, is_verify)
+                return _common_load_impl(s, is_verify, _verify_with_schema,
+                                         self.json_schema)
             except Exception as e:
                 return Err(e)
 
@@ -311,7 +306,8 @@ class JsonSource(BaseModel):
         async with await open_file(self.path, "r", encoding="utf-8") as f:
             try:
                 s = await f.read()
-                return self._load_impl(s, is_verify)
+                return _common_load_impl(s, is_verify, _verify_with_schema,
+                                         self.json_schema)
             except Exception as e:
                 return Err(e)
 
@@ -319,18 +315,18 @@ class JsonSource(BaseModel):
         """
         Verifies the data with the schema
         """
-        return verify(content, self.json_schema)
+        return _verify_with_schema(content, self.json_schema)
 
 
 def unmarshal_data_source(data: Dict[str, Any]) -> IDataSource:
     source_type = data.get(SOURCE_TYPE_KEY)
     if source_type is None:
         raise ValueError("source type is required")
-    if source_type == SourceType.JSON.value:
-        return JsonSource(**data)
+    if source_type == SourceType.File.value:
+        return FileSource(**data)
     elif source_type == SourceType.API.value:
         return APISource(**data)
-    elif source_type == SourceType.DICT.value:
+    elif source_type == SourceType.Dict.value:
         return DictSource(**data)
     else:
         raise ValueError(f"unknown source type: {source_type}")

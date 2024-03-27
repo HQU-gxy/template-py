@@ -368,11 +368,15 @@ class PathVariable(BaseModel):
 async def unmarshal_variable(
         variable: Dict[str, Any],
         data_sources: Optional[Sequence[IDataSource]] = None,
+        loaded_sources: Optional[Dict[str, Dict[str, Any]]] = None,
         imports: Optional[ImportsLike] = None) -> IVariable:
     """
     Unmarshal a list of variables from a dictionary
+
+    @warning: if `loaded_sources` is provided, this function will use the data
+    from the loaded sources prior to loading the data from the data sources and
+    mutate the `loaded_sources` dictionary by storing the loaded data
     """
-    loaded: Dict[str, Dict[str, Any]] = {}
     if "expr" in variable:
         return LiteralVariable(**variable, imports=imports)
     elif "source" in variable:
@@ -382,15 +386,16 @@ async def unmarshal_variable(
                 "Data sources must be provided to unmarshal PathVariable")
 
         async def try_load(source_name: str) -> Dict[str, Any]:
-            if source_name in loaded:
-                return loaded[source_name]
+            if loaded_sources is not None and source_name in loaded_sources:
+                return loaded_sources[source_name]
             source: IDataSource = next(
                 filter(lambda x: x.name == source, data_sources))
             data = await source.load_async()
             if data.is_err():
                 raise RuntimeError(f"Failed to load data source {source_name}",
                                    data.unwrap_err())
-            loaded[source_name] = data.unwrap()
+            if loaded_sources is not None:
+                loaded_sources[source_name] = data.unwrap()
             return data.unwrap()
 
         source = variable["source"]

@@ -34,8 +34,10 @@ async def unmarshal_template(data: Dict[str, Any]) -> TemplateReturn:
     check_type(variables_, List[Dict[str, Any]])
     if len(variables_) == 0:
         raise ValueError("no variables provided")
+    loaded = {}
     variables = [
-        await unmarshal_variable(v, data_sources, imports) for v in variables_
+        await unmarshal_variable(v, data_sources, loaded, imports)
+        for v in variables_
     ]
     contents_ = data.get("content", [])
     contents = [unmarshal_content(c) for c in contents_]
