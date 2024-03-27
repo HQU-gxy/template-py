@@ -163,7 +163,7 @@ class DictSource(BaseModel):
                  name: str,
                  data: Dict[str, Any],
                  comment: Optional[str] = None,
-                 schema: JsonSchemaLoader = None,
+                 schema: Optional[JsonSchemaDict] = None,
                  **data_):
         super().__init__(name=name,
                          data=data,
@@ -319,6 +319,10 @@ class FileSource(BaseModel):
 
 
 def unmarshal_data_source(data: Dict[str, Any]) -> IDataSource:
+    # TODO: handle JsonSchemaLoader
+    # now we only support "json_schema" field to be a dict in the future, it
+    # should be able to handle a string (url or file path).  further more, one
+    # should able config file path root (instead of using absolute path)
     source_type = data.get(SOURCE_TYPE_KEY)
     if source_type is None:
         raise ValueError("source type is required")
