@@ -1,25 +1,23 @@
-from dataclasses import dataclass
+from pydantic import BaseModel
 from result import Result, Ok, Err
 import xxhash
 from typing import Tuple, List
 
 
-@dataclass
-class ParseStepResult:
+class ParseStepResult(BaseModel):
     text: str
     offset: int
     hash: str
     expr: str
 
 
-@dataclass
-class ParseResult:
+class ParseResult(BaseModel):
     text: str
     table: List[Tuple[str, str]]
 
 
-def parse_step(text: str,
-               start_offset: int = 0) -> Result[ParseStepResult, Exception]:
+def _parse_step(text: str,
+                start_offset: int = 0) -> Result[ParseStepResult, Exception]:
     """
     Parse a text and return the next unparsed text and the parsed expression
     """
@@ -60,16 +58,20 @@ def parse_step(text: str,
                 after_expr = text[e_offset:]
                 new_text = f"{before_expr}{digest}{after_expr}"
                 next_offset = s_offset + len(digest)
-                return Ok(ParseStepResult(new_text, next_offset, digest, expr))
+                r = ParseStepResult(text=new_text,
+                                    offset=next_offset,
+                                    hash=digest,
+                                    expr=expr)
+                return Ok(r)
     return Err(EOFError("No more expressions"))
 
 
-def parse(text) -> Result[ParseResult, Exception]:
+def parse(text: str) -> Result[ParseResult, Exception]:
     table: List[tuple[str, str]] = []
     mutate_text = text
     offset = 0
     while True:
-        res_ = parse_step(mutate_text, offset)
+        res_ = _parse_step(mutate_text, offset)
         match res_:
             case Err(e):
                 if isinstance(e, EOFError):
@@ -80,4 +82,5 @@ def parse(text) -> Result[ParseResult, Exception]:
                 table.append((res.hash, res.expr))
                 mutate_text = res.text
                 offset = res.offset
-    return Ok(ParseResult(mutate_text, table))
+    r = ParseResult(text=mutate_text, table=table)
+    return Ok(r)
