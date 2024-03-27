@@ -1,8 +1,9 @@
-from typing import Dict, Iterable, Literal, List, Tuple, Optional
+from typing import Dict, Iterable, Literal, List, Sequence, Tuple, Optional
 from pydantic import BaseModel, validator
 from result import Result, Ok, Err
 from typeguard import check_type
 from app.template.dependency.extractor import parse as parse_expr, ParseResult
+from app.template.dependency.resolver import EvaluatedVariable, to_env_dict
 from app.template.variable.expr import EnvDict, LazyExpr
 from app.template.variable.model import ImportsLike
 
@@ -25,14 +26,25 @@ class HtmlParseResult(BaseModel):
     class Config:
         frozen = True
 
-    def load(self, env: EnvDict) -> str:
+    def load(self, evaluated: Sequence[EvaluatedVariable]) -> str:
+        env = to_env_dict(evaluated)
+        formatters = {
+            var.name: var.formatter
+            for var in evaluated
+            if var.formatter is not None
+        }
 
         def replace_exprs(text: str) -> str:
             # mut_text will be mutated by each replacement
             mut_text = text
             for name, expr in self.exprs.items():
+                formatter = None
+                if expr.solely_dependency is not None:
+                    formatter = formatters.get(expr.solely_dependency)
                 val = expr.eval(env)
-                mut_text = mut_text.replace(f"${{{name}}}", str(val))
+                mut_text = mut_text.replace(
+                    f"${{{name}}}",
+                    formatter(val) if formatter else str(val))
             return mut_text
 
         return replace_exprs(self.text_with_hash)
@@ -45,7 +57,9 @@ class ColumnParseResult(BaseModel):
     class Config:
         frozen = True
 
-    def load(self, env: EnvDict) -> Dict[str, NumberArray]:
+    def load(self,
+             evaluated: Sequence[EvaluatedVariable]) -> Dict[str, NumberArray]:
+        env = to_env_dict(evaluated)
 
         def load_lazy(lazy: LazyExpr | LazyExpr[NumberArray]) -> NumberArray:
             val = list(lazy.eval(env))

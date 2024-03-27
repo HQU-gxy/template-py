@@ -1,14 +1,24 @@
-from typing import List, Dict, Any, Sequence
+from dataclasses import dataclass
+from typing import List, Dict, Any, Sequence, Optional
 import networkx as nx
 from result import Result, Ok, Err
-from app.template.variable.model import Variable
+from app.template.variable.model import FormatterFn, Variable
+
+
+@dataclass
+class EvaluatedVariable:
+    name: str
+    value: Any
+    formatter: Optional[FormatterFn]
+
+
+def to_env_dict(variables: Sequence[EvaluatedVariable]) -> Dict[str, Any]:
+    return {var.name: var.value for var in variables}
 
 
 class DependencyResolver:
     _table: list[Variable]
     _graph: nx.DiGraph
-    _env: Dict[str, Any]
-    _dirty: bool = False
 
     def __init__(self) -> None:
         self._table = []
@@ -23,7 +33,6 @@ class DependencyResolver:
         self._graph.add_node(variable.name)
         for unbound in variable.unbound:
             self._graph.add_edge(variable.name, unbound)
-        self._dirty = True
         return Ok(None)
 
     def add_many(self,
@@ -35,7 +44,7 @@ class DependencyResolver:
         return Ok(None)
 
     @staticmethod
-    def sort_by_topological(variables: List[Variable], topological: List[str]):
+    def _sort_by_topological(variables: List[Variable], topological: List[str]):
         index_map = {name: i for i, name in enumerate(reversed(topological))}
         # Sort the list based on the mapping
         sorted_lst = sorted(variables, key=lambda var: index_map[var.name])
@@ -49,36 +58,42 @@ class DependencyResolver:
             return Err(ValueError(f"unbound variables: {invalid_names}"))
         try:
             topological = nx.topological_sort(self._graph)
-            self._table = DependencyResolver.sort_by_topological(
+            self._table = DependencyResolver._sort_by_topological(
                 self._table, list(topological))
         except nx.NetworkXUnfeasible as e:
             # circular dependency
             return Err(e)
         return Ok(None)
 
-    @property
-    def env(self) -> Result[Dict[str, Any], Exception]:
-        if self._dirty:
-            err = self.resolve()
-            if err.is_err():
-                return Err(err.unwrap_err())
-            env: Dict[str, Any] = {}
-            for var in self._table:
-                try:
-                    env[var.name] = var.load(env=env).unwrap()
-                except Exception as e:
-                    obj = {"var": var, "exception": e}
-                    return Err(
-                        RuntimeError(
-                            "failed to evaluate variable `{}`".format(var.name),
-                            obj))
-            self._env = env
-            self._dirty = False
-        return Ok(self._env)
+    def eval(self) -> List[EvaluatedVariable]:
+        err = self.resolve()
+        if err.is_err():
+            raise RuntimeError("failed to resolve dependencies",
+                               err.unwrap_err())
+
+        env: Dict[str, Any] = {}
+
+        def eval_var(var: Variable) -> EvaluatedVariable:
+            """
+            @warning: cause side effect to `env`
+            """
+            value = var.load(env=env)
+            if value.is_err():
+                raise RuntimeError(f"failed to evaluate variable `{var.name}`",
+                                   value.unwrap_err())
+            val = value.unwrap()
+            env[var.name] = val
+            formatter = var.eval_formatter(env=env)
+            return EvaluatedVariable(name=var.name,
+                                     value=val,
+                                     formatter=formatter)
+
+        return [eval_var(var) for var in self._table]
 
 
 def resolve_env(
-        variables: Sequence[Variable]) -> Result[Dict[str, Any], Exception]:
+    variables: Sequence[Variable]
+) -> Result[List[EvaluatedVariable], Exception]:
     """
     Resolve the environment from the given variables
     """
@@ -86,4 +101,8 @@ def resolve_env(
     res = resolver.add_many(variables)
     if res.is_err():
         return Err(res.unwrap_err())
-    return resolver.env
+    try:
+        lst = resolver.eval()
+        return Ok(lst)
+    except Exception as e:
+        return Err(e)

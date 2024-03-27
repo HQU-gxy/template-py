@@ -79,6 +79,13 @@ class LazyExpr(BaseModel, Generic[T]):
         return self._finder.unbound
 
     @property
+    def solely_dependency(self):
+        """
+        Returns whether the expression only depends on one and solely a variable
+        """
+        return self._finder.solely_dependency
+
+    @property
     def target(self):
         """
         If the expression is a named expression (defined with walrus operator `:=`), returns the name of the variable

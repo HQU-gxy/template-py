@@ -81,6 +81,16 @@ class UnboundVariableFinder(ast.NodeVisitor):
     def unbound(self):
         return self._unbound - self._imports - self.builtin
 
+    @property
+    def solely_dependency(self) -> Optional[str]:
+        """
+        whether the expression is a single variable
+        """
+        if len(self._unbound) == 1:
+            return next(iter(self._unbound))
+        else:
+            return None
+
 
 class ImportValidator(ast.NodeVisitor):
 

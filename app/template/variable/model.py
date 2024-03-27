@@ -78,7 +78,7 @@ def nullable_common_parse_expr(
     return common_parse_expr(expr, imports)
 
 
-def common_format_impl(val: Any,
+def _common_format_impl(val: Any,
                        formatter: Optional[LazyFormatter | FormatterFn],
                        env: EnvDict = None) -> str:
     if formatter is not None:
@@ -91,7 +91,7 @@ def common_format_impl(val: Any,
     return str(val)
 
 
-def common_preprocess_impl(val: Any,
+def _common_preprocess_impl(val: Any,
                            preprocessor: Optional[LazyPreprocessor |
                                                   PreprocessorFn],
                            env: EnvDict = None) -> Any:
@@ -104,7 +104,7 @@ def common_preprocess_impl(val: Any,
             raise ValueError(f"Invalid preprocessor type {type(preprocessor)}")
 
 
-def common_verify_impl(val: Any,
+def _common_verify_impl(val: Any,
                        verifier: Optional[LazyValidator | ValidatorFn],
                        t: TypeLike = None,
                        env: EnvDict = None) -> bool:
@@ -142,11 +142,33 @@ class Variable(Protocol):
     def load(self, env: EnvDict = None) -> Result[Any, Exception]:
         ...
 
+    def eval_formatter(self, env: EnvDict = None) -> Optional[FormatterFn]:
+        """
+        maybe throw an error if the formatter is not callable
+        """
+        ...
+
     def format(self, env: EnvDict = None) -> str:
         ...
 
     def verify(self, env: EnvDict = None) -> bool:
         return True
+
+
+def _common_eval_formatter(formatter: Optional[LazyFormatter],
+                           env: EnvDict = None) -> Optional[FormatterFn]:
+    if formatter is not None:
+        if isinstance(formatter, LazyExpr):
+            f = formatter.eval(env)
+            if isinstance(f, Callable):
+                return f
+            else:
+                raise ValueError(f"Invalid formatter type {type(f)} ({f})")
+        elif isinstance(formatter, Callable):
+            return formatter
+        else:
+            raise ValueError(f"Invalid formatter type {type(formatter)}")
+    return None
 
 
 class LiteralVariable(BaseModel):
@@ -209,12 +231,15 @@ class LiteralVariable(BaseModel):
             s |= self.expr.unbound
         return s
 
+    def eval_formatter(self, env: EnvDict = None) -> Optional[FormatterFn]:
+        return _common_eval_formatter(self.formatter, env)
+
     def format(self, env: EnvDict = None) -> str:
-        return common_format_impl(self.load(env).unwrap(), self.formatter, env)
+        return _common_format_impl(self.load(env).unwrap(), self.formatter, env)
 
     def verify(self, env: EnvDict = None) -> bool:
         val = self.load(env)
-        return common_verify_impl(val.unwrap(), None, self.t, env)
+        return _common_verify_impl(val.unwrap(), None, self.t, env)
 
 
 class PathVariable(BaseModel):
@@ -304,13 +329,16 @@ class PathVariable(BaseModel):
 
     def preprocess(self, item: Any, env: EnvDict = None) -> Any:
         if self.preprocessor is not None:
-            return common_preprocess_impl(item, self.preprocessor, env)
+            return _common_preprocess_impl(item, self.preprocessor, env)
         return item
 
+    def eval_formatter(self, env: EnvDict = None) -> Optional[FormatterFn]:
+        return _common_eval_formatter(self.formatter, env)
+
     def format(self, env: EnvDict = None) -> str:
-        return common_format_impl(self.load(env).unwrap(), self.formatter, env)
+        return _common_format_impl(self.load(env).unwrap(), self.formatter, env)
 
     def verify(self, env: EnvDict = None) -> bool:
         val = self.load(env)
-        return common_verify_impl(self.preprocess(val.unwrap()), self.verifier,
+        return _common_verify_impl(self.preprocess(val.unwrap()), self.verifier,
                                   self.t, env)
