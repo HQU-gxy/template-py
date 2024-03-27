@@ -16,16 +16,16 @@ class Template(TypedDict):
     """
     data_sources: List[IDataSource]
     variables: List[IVariable]
-    content: List[IContent]
+    contents: List[IContent]
     imports: ImportsLike
 
 
 class TemplateReturn(TypedDict):
     variables: List[Dict[str, Any]]
-    content: List[Dict[str, Any]]
+    contents: List[Dict[str, Any]]
 
 
-async def unmarshal_template(data: Dict[str, Any]) -> TemplateReturn:
+async def evaluate_template(data: Dict[str, Any]) -> TemplateReturn:
     imports: ImportsLike = data.get("imports", [])
     check_type(imports, ImportsLike)
     data_sources_ = data.get("data_sources", [])
@@ -39,16 +39,10 @@ async def unmarshal_template(data: Dict[str, Any]) -> TemplateReturn:
         await unmarshal_variable(v, data_sources, loaded, imports)
         for v in variables_
     ]
-    contents_ = data.get("content", [])
+    contents_ = data.get("contents", [])
     contents = [unmarshal_content(c) for c in contents_]
 
-    evaluated_vars_ = resolve_and_evaluate(variables)
-    evaluated_vars: List[EvaluatedVariable] | None = None
-    match evaluated_vars_:
-        case Ok(v):
-            evaluated_vars = v
-        case Err(e):
-            raise e
+    evaluated_vars = resolve_and_evaluate(variables)
     evaluated_contents = [
         c.eval_result(evaluated_vars, imports) for c in contents
     ]
@@ -56,5 +50,5 @@ async def unmarshal_template(data: Dict[str, Any]) -> TemplateReturn:
         "variables": [{
             var.name: var.value
         } for var in evaluated_vars],
-        "content": evaluated_contents,
+        "contents": evaluated_contents,
     }

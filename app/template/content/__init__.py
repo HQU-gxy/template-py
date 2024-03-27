@@ -193,7 +193,6 @@ class HtmlContent(BaseModel):
 
 class PlotContent(BaseModel):
     plot_type: SUPPORTED_PLOTS
-    # if it's str, we interoperate it
     data: ColumnLike
 
     class Config:
@@ -222,7 +221,7 @@ class TableContent(BaseModel):
         frozen = True
 
     def __init__(self, data: ColumnLike, **kwargs):
-        super().__init__(data=data, table_type="table", **kwargs)
+        super().__init__(data=data, **kwargs)
 
     def extract(
         self, imports: Optional[ImportsLike]

@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import List, Dict, Any, Sequence, Optional
 import networkx as nx
 from result import Result, Ok, Err
+from typeguard import check_type
 from app.template.variable.model import FormatterFn, IVariable
 
 
@@ -10,6 +11,13 @@ class EvaluatedVariable:
     name: str
     value: Any
     formatter: Optional[FormatterFn]
+
+    def format(self) -> str:
+        if self.formatter is None:
+            return str(self.value)
+        val = self.formatter(self.value)
+        check_type(val, str)
+        return val
 
 
 def to_env_dict(variables: Sequence[EvaluatedVariable]) -> Dict[str, Any]:
@@ -95,16 +103,12 @@ class DependencyResolver:
 
 def resolve_and_evaluate(
     variables: Sequence[IVariable]
-) -> Result[List[EvaluatedVariable], Exception]:
+) -> List[EvaluatedVariable]:
     """
     Resolve the environment from the given variables
     """
     resolver = DependencyResolver()
     res = resolver.add_many(variables)
     if res.is_err():
-        return Err(res.unwrap_err())
-    try:
-        lst = resolver.eval()
-        return Ok(lst)
-    except Exception as e:
-        return Err(e)
+        raise RuntimeError("failed to add variables", res.unwrap_err())
+    return resolver.eval()

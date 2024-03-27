@@ -57,7 +57,7 @@ def _common_parse_expr(expr: LazyExprLike,
             return LazyExpr(raw=expr.raw, imports=[*imports, *imports_])
         return expr
     else:
-        raise ValueError(f"Invalid type {type(expr)}")
+        raise ValueError(f"Invalid type {type(expr)} when parsing expression")
 
 
 def _common_parse_type(t: str | type | None,
@@ -69,7 +69,9 @@ def _common_parse_type(t: str | type | None,
     expr = LazyExpr(raw=t, imports=imports)
     t = expr.eval()
     if not isinstance(t, type):
-        raise ValueError(f"Expected type must be a type. Get {t} ({type(t)})")
+        raise ValueError(
+            f"Expected type must be a type. Get {t} ({type(t)}) when parsing type"
+        )
     return t
 
 
@@ -79,19 +81,6 @@ def _common_parse_expr_nullable(
     if expr is None:
         return None
     return _common_parse_expr(expr, imports)
-
-
-def _common_format_impl(val: Any,
-                        formatter: Optional[LazyFormatter | FormatterFn],
-                        env: EnvDict = None) -> str:
-    if formatter is not None:
-        if isinstance(formatter, LazyExpr):
-            return formatter(val, env=env)
-        elif isinstance(formatter, Callable):
-            return formatter(val)
-        else:
-            raise ValueError(f"Invalid formatter type {type(formatter)}")
-    return str(val)
 
 
 def _common_preprocess_impl(val: T,
@@ -112,7 +101,9 @@ def _common_preprocess_impl(val: T,
                 return Err(e)
         else:
             return Err(
-                ValueError(f"Invalid preprocessor type {type(preprocessor)}"))
+                ValueError(
+                    f"Invalid preprocessor type {type(preprocessor)} when preprocessing value {val}"
+                ))
     # T == U in this case since there is no preprocessor
     v = cast(U, val)
     return Ok(v)
@@ -276,7 +267,6 @@ class PathVariable(BaseModel):
     formatter: Optional[LazyFormatter] = None
     verifier: Optional[LazyValidator] = None
     preprocessor: Optional[LazyPreprocessor] = None
-    # the type that after preprocessing
     t: TypeLike = None
 
     class Config:
@@ -308,8 +298,6 @@ class PathVariable(BaseModel):
     def _preprocess_expressions(cls, values):  # pylint: disable=no-self-argument
         inst_imports = values.get("_inst_imports") or []
         imports = [*inst_imports, *global_imports()]
-        expr_ = values.get("expr")
-        values["expr"] = _common_parse_expr(expr_, imports)
         formatter_ = values.get("formatter")
         values["formatter"] = _common_parse_expr_nullable(formatter_, imports)
         t_ = values.get("t")
@@ -388,8 +376,11 @@ async def unmarshal_variable(
         async def try_load(source_name: str) -> Dict[str, Any]:
             if loaded_sources is not None and source_name in loaded_sources:
                 return loaded_sources[source_name]
-            source: IDataSource = next(
-                filter(lambda x: x.name == source, data_sources))
+            try:
+                source: IDataSource = next(
+                    filter(lambda x: x.name == source_name, data_sources))
+            except StopIteration:
+                raise ValueError(f"Data source {source_name} not found")
             data = await source.load_async()
             if data.is_err():
                 raise RuntimeError(f"Failed to load data source {source_name}",
@@ -398,8 +389,8 @@ async def unmarshal_variable(
                 loaded_sources[source_name] = data.unwrap()
             return data.unwrap()
 
-        source = variable["source"]
-        check_type(source, str)
+        source_key = variable["source"]
+        check_type(source_key, str)
         source = await try_load(variable["source"])
         # exclude the source key
         variable.pop("source")
