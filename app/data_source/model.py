@@ -17,22 +17,28 @@ SOURCE_TYPE_KEY = "source_type"
 class SourceType(Enum):
     JSON = "json"
     API = "api"
+    DICT = "dict"
 
 
-# str is could be parsed as file path or url
-# dict is a json schema itself
-# None means no schema (no validation)
-JsonSchemaLoader = Union[Dict[str, Any], str, None]
+JsonSchemaDict = Dict[str, Any]
+
+# the loading process should be offloaded to the caller
+#  - str is could be parsed as file path or url
+#  - dict is a json schema itself
+#  - None means no schema (no validation)
+JsonSchemaLoader = Union[JsonSchemaDict, str, None]
 
 
-def verify(data: Dict[str, Any],
-           schema: JsonSchemaLoader) -> Result[None, Exception]:
+def try_load_json_schema(
+        schema: JsonSchemaLoader
+) -> Result[Optional[JsonSchemaDict], Exception]:
     """
-    Verifies the data with the schema
-    """
-    if schema is None:
-        return Ok(None)
+    Tries to load the json schema from a file path or a url if the schema is a string
 
+    Otherwise, it returns the schema itself if it's a dict
+    """
+
+    # TODO: search path if it's a file path
     def parse_str_as_file_path_or_url(
             s: str) -> Result[Dict[str, Any], Exception]:
         # if it's start with http(s), it's a url
@@ -61,31 +67,35 @@ def verify(data: Dict[str, Any],
             except Exception as e:
                 return Err(e)
 
-    def handle_str(s: str) -> Result[None, Exception]:
-        schema_res = parse_str_as_file_path_or_url(s)
-        match schema_res:
-            case Ok(schema):
-                try:
-                    validate(data, schema)
-                    return Ok(None)
-                except ValidationError as e:
-                    return Err(e)
-            case Err(e):
-                return Err(e)
-
     if isinstance(schema, str):
-        return handle_str(schema)
+        return parse_str_as_file_path_or_url(schema)
     elif isinstance(schema, dict):
-        try:
-            validate(data, schema)
-            return Ok(None)
-        except ValidationError as e:
-            return Err(e)
+        return Ok(schema)
     elif schema is None:
         return Ok(None)
     else:
         return Err(
             TypeError(f"schema must be a dict or a str; get {type(schema)}"))
+
+
+def verify(data: Dict[str, Any],
+           schema: JsonSchemaLoader) -> Result[None, Exception]:
+    """
+    Verifies the data with the schema
+    """
+    m_schema = try_load_json_schema(schema)
+    match m_schema:
+        case Ok(s):
+            if schema is None:
+                return Ok(None)
+            try:
+                assert s is not None
+                validate(data, s)
+                return Ok(None)
+            except ValidationError as e:
+                return Err(e)
+        case Err(e):
+            return Err(e)
 
 
 def common_load_impl(
@@ -139,12 +149,62 @@ class DataSource(Protocol):
         ...
 
 
+class DictSource(BaseModel):
+    SOURCE_TYPE: Final[SourceType] = SourceType.DICT
+    name: str
+    data: Dict[str, Any]
+    comment: Optional[str] = None
+    json_schema: Optional[JsonSchemaDict] = None
+
+    class Config:
+        exclude = ["SOURCE_TYPE"]
+
+    def __init__(self,
+                 name: str,
+                 data: Dict[str, Any],
+                 comment: Optional[str] = None,
+                 schema: JsonSchemaLoader = None,
+                 **data_):
+        super().__init__(name=name,
+                         data=data,
+                         comment=comment,
+                         schema=schema,
+                         **data_)
+
+    @staticmethod
+    def source_type() -> SourceType:
+        return DictSource.SOURCE_TYPE
+
+    def load(self, is_verify=True) -> Result[Dict[str, Any], Exception]:
+        """
+        load json file from `path`
+        """
+        if is_verify:
+            verify_res = verify(self.data, self.json_schema)
+            if verify_res.is_err():
+                return Err(verify_res.unwrap_err())
+        return Ok(self.data)
+
+    async def load_async(self,
+                         is_verify=True) -> Result[Dict[str, Any], Exception]:
+        """
+            load json file from `path` asynchronously
+            """
+        return self.load(is_verify)
+
+    def verify(self, content: Dict[str, Any]) -> Result[None, Exception]:
+        """
+        Verifies the data with the schema
+        """
+        return verify(content, self.json_schema)
+
+
 class APISource(BaseModel):
     SOURCE_TYPE: Final[SourceType] = SourceType.API
     name: str
     url: str
     comment: Optional[str] = None
-    schema: JsonSchemaLoader = None
+    json_schema: Optional[JsonSchemaDict] = None
 
     class Config:
         exclude = ["SOURCE_TYPE"]
@@ -167,7 +227,7 @@ class APISource(BaseModel):
 
     def _load_impl(self, s: str,
                    is_verify: bool) -> Result[Dict[str, Any], Exception]:
-        return common_load_impl(s, is_verify, verify, self.schema)
+        return common_load_impl(s, is_verify, verify, self.json_schema)
 
     def load(self, is_verify=True) -> Result[Dict[str, Any], Exception]:
         """load json file from `url`
@@ -199,7 +259,7 @@ class APISource(BaseModel):
         """
         Verifies the data with the schema
         """
-        return verify(content, self.schema)
+        return verify(content, self.json_schema)
 
 
 class JsonSource(BaseModel):
@@ -207,7 +267,7 @@ class JsonSource(BaseModel):
     name: str
     path: str
     comment: Optional[str] = None
-    schema: JsonSchemaLoader = None
+    json_schema: Optional[JsonSchemaDict] = None
 
     class Config:
         exclude = ["SOURCE_TYPE"]
@@ -230,7 +290,7 @@ class JsonSource(BaseModel):
 
     def _load_impl(self, s: str,
                    is_verify: bool) -> Result[Dict[str, Any], Exception]:
-        return common_load_impl(s, is_verify, verify, self.schema)
+        return common_load_impl(s, is_verify, verify, self.json_schema)
 
     def load(self, is_verify=True) -> Result[Dict[str, Any], Exception]:
         """
@@ -259,16 +319,18 @@ class JsonSource(BaseModel):
         """
         Verifies the data with the schema
         """
-        return verify(content, self.schema)
+        return verify(content, self.json_schema)
 
 
 def unmarshal_data_source(data: Dict[str, Any]) -> DataSource:
     source_type = data.get(SOURCE_TYPE_KEY)
     if source_type is None:
-        raise ValueError(f"source type is required")
+        raise ValueError("source type is required")
     if source_type == SourceType.JSON:
         return JsonSource(**data)
     elif source_type == SourceType.API:
         return APISource(**data)
+    elif source_type == SourceType.DICT:
+        return DictSource(**data)
     else:
         raise ValueError(f"unknown source type: {source_type}")

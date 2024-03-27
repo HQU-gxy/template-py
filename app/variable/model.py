@@ -92,8 +92,8 @@ def common_format_impl(val: Any,
 
 
 def common_preprocess_impl(val: Any,
-                           preprocessor: Optional[LazyPreprocessor
-                                                  | PreprocessorFn],
+                           preprocessor: Optional[LazyPreprocessor |
+                                                  PreprocessorFn],
                            env: EnvDict = None) -> Any:
     if preprocessor is not None:
         if isinstance(preprocessor, LazyExpr):
@@ -180,7 +180,7 @@ class LiteralVariable(BaseModel):
                          _inst_imports=imports,
                          **data)
 
-    @model_validator(mode="before")
+    @model_validator(mode="before") # type: ignore
     def _preprocess_expressions(cls, values):  # pylint: disable=no-self-argument
         inst_imports = values.get("_inst_imports") or []
         imports = [*inst_imports, *global_imports()]
@@ -256,7 +256,7 @@ class PathVariable(BaseModel):
                          _inst_imports=imports,
                          **data)
 
-    @model_validator(mode="before")
+    @model_validator(mode="before")  # type: ignore
     def _preprocess_expressions(cls, values):  # pylint: disable=no-self-argument
         inst_imports = values.get("_inst_imports") or []
         imports = [*inst_imports, *global_imports()]
